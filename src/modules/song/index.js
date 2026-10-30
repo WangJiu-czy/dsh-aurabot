@@ -3,6 +3,7 @@
 
 import { createSongStudio, checkRoot, listDrives } from '../../song/studio.js'
 import { defineTool, str, int } from '../../tools/tools.js'
+import { memoryScopeFor, chatFromKey } from '../../chat/im-context.js'
 
 export default {
   id: 'song',
@@ -21,7 +22,9 @@ export default {
       log: api.log,
       sendVoiceFile: (chatId, file, note) => hub.sendVoiceFile(chatId, file, note),
       sendText: (chatId, text) => hub.sendText(chatId, text),
-      onSung: (title, chatId) => {
+      supportsNativeVoice: chatId => hub.supportsMedia(chatId, 'nativeVoice'),
+      captureDelivery: chatId => hub.captureMediaDelivery(chatId),
+      onSung: (title, chatId, originalChat) => {
         const cfg = api.config()
         mood.nudge?.(8, `唱完了「${title}」`)
         // 唱过的歌记成她的经历：私聊记到对方头上

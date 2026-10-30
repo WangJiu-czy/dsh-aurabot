@@ -1,5 +1,4 @@
-// 内置模块：刷抖音。专用浏览器里登录一次；定时自己刷推荐、点赞、评论（特别想让主人看的会在评论里真·@主人），看到好玩的分享给主人（抖音私信 / QQ）；
-// 别人发来抖音链接，她也能点开看完再聊。浏览 / 点赞 / 评论 / 分享各有权限（面板「权限」页），默认仅主人。
+// 内置模块：ego-lite 抖音浏览能力。消息登录与收发由 douyin-bridge 负责；本模块处理观看、点赞、评论和分享工具。
 
 import { createDouyin } from '../../douyin/duty.js'
 import { defineTool, str } from '../../tools/tools.js'
@@ -11,12 +10,14 @@ export default {
   version: '2.0.0',
   description: '专用浏览器刷抖音：看推荐、点赞、评论（可在评论里真·@主人），好玩的分享给主人（抖音私信 / QQ）；别人发来链接能点开看（douyin_watch / douyin_like / douyin_comment / douyin_browse）',
   tab: 'douyin',
-  files: ['douyin/duty.js', 'douyin/site.js', 'douyin/browser.js'],
+  files: ['douyin/duty.js', 'douyin/site.js', 'douyin/browser.js', 'douyin/ego-browser.js'],
   setup(api) {
     const { hub, http } = api.core
+    const getImState = () => api.use('douyin-bridge')?.state?.() ?? null
     // 主人的抖音号只由「核对」写入（面板存配置时不能直接改 secUid）
     const setOwner = (owner) => api.setConfig((cur) => ({ ...cur, douyin: { ...cur.douyin, owner } }))
-    const dy = createDouyin({ getConfig: api.config, setOwner, hub, memory: api.lazy('memory'), log: api.log })
+    const dy = createDouyin({ getConfig: api.config, setOwner, hub, memory: api.lazy('memory'), log: api.log, getImState })
+    api.onDispose(() => dy.dispose())
     api.every(60_000, () => dy.tick(), '刷抖音')
 
     api.tool(({ chat, sessionId }) => {
@@ -87,7 +88,7 @@ export default {
     })
 
     // 面板：/douyin/state 只读文件，绝不为了显示状态去开浏览器
-    api.route('/douyin/state', async () => ({ ok: true, ...dy.state() }))
+    api.route('/douyin/state', async () => ({ ok: true, ...dy.state(), im: getImState() ?? { status: 'bridge-disabled' } }))
     api.route('/douyin/account', async () => dy.account(true))
     api.route('/douyin/login', async () => dy.loginStep(true))
     api.route('/douyin/login/status', async () => dy.loginStep(false))
@@ -96,7 +97,6 @@ export default {
       return dy.showWindow(Boolean(b?.visible))
     })
     api.route('/douyin/run', async () => dy.browse())
-    api.route('/douyin/dms', async () => dy.checkOwnerDms())
     api.route('/douyin/confirm-owner', async (req) => {
       const b = await http.body(req).catch(() => ({}))
       return dy.confirmOwner(String(b?.input ?? api.config().douyin.owner.input ?? ''))

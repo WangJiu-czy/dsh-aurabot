@@ -15,7 +15,7 @@ export function seedPersonas() {
   mkdirSync(dir(), { recursive: true })
   try {
     for (const n of readdirSync(BUNDLED)) {
-      if (n.endsWith('.md') && !existsSync(join(dir(), n))) copyFileSync(join(BUNDLED, n), join(dir(), n))
+      if (n.endsWith('.md') && !existsSync(join(dir(), n)) && !existsSync(join(dataDir('persona-deletions'), n))) copyFileSync(join(BUNDLED, n), join(dir(), n))
     }
   } catch (error) {}
 }
@@ -66,12 +66,18 @@ export function savePersona(id, { name, tags, body }) {
   mkdirSync(dir(), { recursive: true })
   const head = `---\nname: ${String(name || sid).replace(/\n/g, ' ')}\ntags: [${(tags || []).join(', ')}]\n---\n\n`
   writeFileSync(join(dir(), `${sid}.md`), head + String(body).trim() + '\n', 'utf8')
+  const tombstone = join(dataDir('persona-deletions'), `${sid}.md`)
+  if (existsSync(tombstone)) unlinkSync(tombstone)
   return readPersona(sid)
 }
 
 export function deletePersona(id) {
-  const f = join(dir(), `${safeId(id)}.md`)
+  const sid = safeId(id)
+  if (!sid) return
+  const f = join(dir(), `${sid}.md`)
   if (existsSync(f)) unlinkSync(f)
+  mkdirSync(dataDir('persona-deletions'), { recursive: true })
+  writeFileSync(join(dataDir('persona-deletions'), `${sid}.md`), '', 'utf8')
 }
 
 /** 当前人格正文；找不到就退回第一个，再不行给一句兜底，保证提示词变量永远有值。 */

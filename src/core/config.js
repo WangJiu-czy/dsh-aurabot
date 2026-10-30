@@ -5,6 +5,7 @@ import { DEFAULT_GROUP_POLICY } from '../chat/group-policy.js'
 import { LEVELS, PROFILE_PERM_KEYS, PROFILE_PERM_LEVELS, profilePermDefault } from '../chat/access.js'
 import { normalizeChatModels } from '../chat/chat-model.js'
 import { DIARY_AUDIENCES } from '../features/qzone-audience.js'
+import { simulationOptions } from '../features/memory-dynamics.js'
 
 export const DEFAULTS = {
   enabled: false, // 总开关：关着一句都不发
@@ -13,6 +14,8 @@ export const DEFAULTS = {
   botQQ: '', // 机器人 QQ 号（向导里填）
   ownerQQ: '', // 主人 QQ 号（向导里填）
   ownerName: '主人',
+  imAccounts: [], // Explicit platform/account owner and allow lists; no QQ identity fallback.
+  personBindings: [], // Explicit identity association only; grants no permission or private visibility.
   ownerLevel: 'full', // full | social | chat
   profilePerms: { qqNickname: 'owner', qqSignature: 'owner', qqAvatar: 'owner', biliSign: 'owner', biliAvatar: 'owner', qqFriendRequest: 'owner', whitelist: 'owner', douyinBrowse: 'owner', douyinLike: 'owner', douyinComment: 'owner', douyinShareOwner: 'owner', douyinDm: 'owner' }, // 改资料类操作（含抖音浏览 / 点赞 / 评论 / 分享）的权限：off 关 / owner 仅主人私聊 / all 所有人。抖音项默认仅主人，总开关默认关
   longTasks: false, // 长任务模式：主人私聊（完整权限）额外挂 dsh-tool-jobs + dsh-tool-schedule，会多一点工具定义、稍慢
@@ -125,6 +128,8 @@ export const DEFAULTS = {
   // 刷抖音：专用浏览器（独立登录资料，不碰你平时的浏览器），经 CDP 控制。浏览 / 点赞 / 评论 / 分享各项权限在 profilePerms.douyin*。
   douyin: {
     enabled: false, // 总开关：默认关，先在面板里扫码登录再打开
+    browserTransport: 'ego-lite', // legacy-cdp is opt-in; no automatic Chrome fallback.
+    im: { enabled: false }, // SDK 消息桥显式登录；授权来自 imAccounts
     autoBrowse: true, // 定时自己去刷
     intervalHours: 4,
     maxRunsPerDay: 3,
@@ -134,8 +139,6 @@ export const DEFAULTS = {
     dwellMax: 40,
     browserPath: '', // 留空 = 自动找 Edge（找不到再找 Chrome / Chromium）；也可填完整路径
     shareBias: 'proactive', // stingy | normal | proactive：刷到好看的视频，分享给主人的积极程度
-    ownerDm: true, // 主人在抖音上私信她时回（只认核对过的主人抖音号）
-    dmPollMinutes: 3, // 隔几分钟看一次主人的抖音私信
     shareTo: 'douyin', // douyin = 在抖音里私信分享给主人（要先核对主人抖音号，没核对 / 发不出去就改发 QQ）| qq = QQ 私聊发链接 | both = 两边都发
     owner: { input: '', secUid: '', uid: '', nickname: '', confirmedInput: '' }, // 主人的抖音号：面板填抖音号 / 主页链接，「核对」后才写入 secUid（真·@主人只认它）
     caps: { like: 30, comment: 3, share: 5, atOwner: 3 }, // 每天上限（登录后前 newAccountDays 天减半）；atOwner = 评论里真·@主人
@@ -166,7 +169,7 @@ export const DEFAULTS = {
     awakeTo: 23,
   },
   mood: { enabled: true, halfLifeHours: 3, judge: false }, // judge：每轮聊完用模型判一次心情（更准，每轮多一次很短的调用）；关着用关键词
-  memory: { enabled: true, recallCount: 6, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'] }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空
+  memory: { enabled: true, recallCount: 6, dailyConsolidate: true, consolidateTimes: ['04:00', '16:00'], simulation: { enabled: false } }, // 每天这几个时间把临时记忆（聊天流水）整理进长期记忆、相处经验和说话方式；过了一天的流水整理完清空
   song: {
     enabled: false,
     root: '', // 翻唱环境目录，留空 = 自动（老安装 C:\Aurabot\rvc，新安装在用户目录下）
@@ -224,6 +227,16 @@ export function normalize(raw) {
   c.dryRun = bool(c.dryRun, true)
   c.botQQ = qq(c.botQQ)
   c.ownerQQ = qq(c.ownerQQ)
+  const ids = v => Array.isArray(v) ? [...new Set(v.filter(x => typeof x === 'string' && x).map(String))] : []
+  const seenAccounts = new Set()
+  c.imAccounts = (Array.isArray(c.imAccounts) ? c.imAccounts : []).filter(a => {
+    if (!isObj(a) || !/^[a-z][a-z0-9-]{1,39}$/.test(a.platform) || typeof a.accountId !== 'string' || !a.accountId) return false
+    const key = JSON.stringify([a.platform, a.accountId])
+    if (seenAccounts.has(key)) return false
+    seenAccounts.add(key)
+    return true
+  }).map(a => ({ platform: a.platform, accountId: a.accountId, enabled: a.enabled === true, ownerId: typeof a.ownerId === 'string' ? a.ownerId : '', allow: { private: ids(a.allow?.private), groups: ids(a.allow?.groups) } }))
+  c.personBindings = (Array.isArray(c.personBindings) ? c.personBindings : []).filter(b => isObj(b) && typeof b.personId === 'string' && b.personId && Array.isArray(b.identities)).map(b => ({ personId: b.personId, identities: b.identities.filter(i => isObj(i) && ['platform', 'accountId', 'senderId'].every(k => typeof i[k] === 'string' && i[k])).map(i => ({ platform: i.platform, accountId: i.accountId, senderId: i.senderId })) }))
   c.gateway = c.gateway === 'onebot' ? 'onebot' : 'snowluma'
   // 只认绝对路径（Windows 的 D:\\… 或 Linux 的 /…），别的当没填
   c.workspaceDir = String(c.workspaceDir || '').trim()
@@ -305,6 +318,8 @@ export function normalize(raw) {
   b.keywords = (Array.isArray(b.keywords) ? b.keywords : String(b.keywords || '').split(/[\n,，]+/)).map((x) => String(x).trim()).filter(Boolean).slice(0, 30)
   const d = c.douyin
   d.enabled = bool(d.enabled, false)
+  d.browserTransport = d.browserTransport === 'legacy-cdp' ? 'legacy-cdp' : 'ego-lite'
+  d.im = { enabled: bool(d.im?.enabled, false) }
   d.autoBrowse = bool(d.autoBrowse, true)
   d.intervalHours = num(d.intervalHours, 4, 1, 48)
   d.maxRunsPerDay = num(d.maxRunsPerDay, 3, 0, 24)
@@ -314,8 +329,8 @@ export function normalize(raw) {
   d.dwellMax = Math.max(d.dwellMin, num(d.dwellMax, 40, 3, 300))
   d.browserPath = String(d.browserPath || '').trim()
   d.shareTo = ['douyin', 'qq', 'both'].includes(d.shareTo) ? d.shareTo : 'douyin'
-  d.ownerDm = bool(d.ownerDm, true)
-  d.dmPollMinutes = num(d.dmPollMinutes, 3, 1, 60)
+  delete d.ownerDm
+  delete d.dmPollMinutes
   d.shareBias = ['stingy', 'normal', 'proactive'].includes(d.shareBias) ? d.shareBias : d.shareBias === 'off' ? 'stingy' : 'proactive'
   if (!isObj(d.caps)) d.caps = {}
   if (raw?.douyin?.caps?.share == null && raw?.douyin?.caps?.shareOwner != null) d.caps.share = raw.douyin.caps.shareOwner // 1.0.x 叫 shareOwner
@@ -338,6 +353,7 @@ export function normalize(raw) {
   c.memory.consolidateTimes = [...new Set((Array.isArray(c.memory.consolidateTimes) ? c.memory.consolidateTimes : String(c.memory.consolidateTimes || '').split(/[\s,，]+/)).map((t) => hhmm(t, '')).filter(Boolean).map((t) => t.padStart(5, '0')))].sort().slice(0, 4)
   if (!c.memory.consolidateTimes.length) c.memory.consolidateTimes = ['04:00', '16:00']
   c.memory.recallCount = num(c.memory.recallCount, 6, 0, 20)
+  c.memory.simulation = simulationOptions(c.memory.simulation)
   g.interests = (Array.isArray(g.interests) ? g.interests : String(g.interests || '').split(/[\s,，]+/)).map((s) => String(s).trim()).filter(Boolean)
   g.minRelevance = num(g.minRelevance, 0.25, 0, 1)
   c.merge.enabled = bool(c.merge.enabled, true)
@@ -511,6 +527,7 @@ export function mergeFromPanel(current, incoming) {
   // 按聊天选模型：两张表整张替换（deepMerge 会让删掉的条目又回来）
   if (incoming?.chatModels?.privates) next.chatModels.privates = incoming.chatModels.privates
   if (incoming?.chatModels?.groups) next.chatModels.groups = incoming.chatModels.groups
+  if (incoming?.chatModels?.conversations) next.chatModels.conversations = incoming.chatModels.conversations
   if (incoming?.allow) next.allow = { ...current.allow, ...incoming.allow }
   return normalize(next)
 }

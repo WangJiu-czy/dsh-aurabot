@@ -1,4 +1,5 @@
-// 抖音专用浏览器：独立用户资料目录的 Edge / Chrome，经 CDP（Node 自带 WebSocket）控制。
+// 默认复用 ego-lite；独立 Edge/Chrome CDP 仅供显式 legacy-cdp 配置兼容。
+import { createEgoBrowser } from './ego-browser.js'
 // 只管「开 / 连 / 点 / 打字 / 截图 / 等接口返回」这些通用动作，抖音相关的都在 site.js。
 // 不用无头模式：抖音会拦无头浏览器（页面一直「加载中」）。Linux 没桌面就配 Xvfb。
 
@@ -120,7 +121,13 @@ export function connectCdp(wsUrl, { WS = globalThis.WebSocket } = {}) {
  * 专用浏览器。open() 才会真的启动 / 连接；只读状态的地方不要调它（打开面板不该弹窗口）。
  * @param {{profileDir:string, browserPath?:()=>string, log?:object}} o
  */
-export function createBrowser({ profileDir, browserPath = () => '', log } = {}) {
+export function createBrowser({ backend = 'ego-lite', ...options } = {}) {
+  if (backend === 'ego-lite') return createEgoBrowser(options)
+  if (backend === 'legacy-cdp') return createLegacyBrowser(options)
+  throw new Error('BROWSER_TRANSPORT_INVALID')
+}
+
+export function createLegacyBrowser({ profileDir, browserPath = () => '', log } = {}) {
   let cdp = null
   let opening = null
 
@@ -311,6 +318,16 @@ export function createBrowser({ profileDir, browserPath = () => '', log } = {}) 
     })
   }
 
+  /** Legacy adapter for the same atomic action/response seam (no cross-round Promise). */
+  async function runAction({ urlRe, action, timeoutMs = 10000 }) {
+    if (!['press', 'enter'].includes(action?.type)) throw new Error('ACTION_INVALID')
+    const response = waitResponse(urlRe, timeoutMs)
+    if (action.type === 'press') await press(action.selector)
+    else await pressEnter()
+    const r = await response
+    return r ? { status: 'observed', response: r } : { status: 'uncertain', code: 'RESPONSE_TIMEOUT' }
+  }
+
   /** 截图（可截一块），返回 data:image/png。 */
   async function screenshot(clip) {
     const r = await need().send('Page.captureScreenshot', { format: 'png', ...(clip ? { clip: { ...clip, scale: 1 } } : {}) })
@@ -331,5 +348,5 @@ export function createBrowser({ profileDir, browserPath = () => '', log } = {}) 
     cdp = null
   }
 
-  return { open, connected, evaluate, goto, waitFor, click, press, type, clearFocused, pressEnter, waitResponse, screenshot, show, close }
+  return { open, connected, evaluate, goto, waitFor, click, press, type, clearFocused, pressEnter, waitResponse, runAction, screenshot, show, close }
 }

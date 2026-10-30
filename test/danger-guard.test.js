@@ -106,3 +106,22 @@ test('非主人会话里的危险命令：直接拦，不打扰主人；重复�
   guard.handleReply(ownerChat, owner, '取消')
   await p1
 })
+
+test('IM dangerous confirmation binds account, conversation, sender and generation; revocation cancels', async () => {
+  const { normalizeImMessage } = await import('../src/chat/im-context.js')
+  const chat = { ...normalizeImMessage({ platform: 'douyin', accountId: 'A', conversation: { kind: 'direct', id: 'thread:1' }, sender: { id: owner }, messageId: '1' }), generation: 4 }
+  const cfg = { enabled: true, security: { dangerConfirm: true }, imAccounts: [{ platform: 'douyin', accountId: 'A', enabled: true, ownerId: owner }] }
+  let current = true
+  const sent = []
+  const guard = createDangerGuard({ getConfig: () => cfg, contextOfSession: () => chat, isCurrent: () => current, chatOfSession: () => chat.chatId, ownerQQ: () => owner, timeoutMs: 500, deliver: async (target, text) => { sent.push(target); return { status: 'confirmed', messageId: 'q' } } })
+  const first = guard.preExecute(execOf('rm -rf /'), () => 'NEXT')
+  await sleep(1)
+  assert.equal(sent[0], chat.chatId)
+  for (const bad of [{ ...chat, accountId: 'B' }, { ...chat, generation: 5 }]) assert.equal(guard.handleReply(chat.chatId, owner, '确认', bad), false)
+  assert.equal(guard.handleReply(chat.chatId, owner, '确认', chat), true)
+  assert.equal(await first, 'NEXT')
+  const second = guard.preExecute(execOf('rm -rf /'), () => 'NEXT')
+  current = false
+  assert.equal((await second).kind, 'deny')
+  assert.equal(guard.pendingCount, 0)
+})

@@ -521,6 +521,10 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
         try { r = typeof b === 'function' ? b(where) : b } catch (error) { note(rec.id, '生成工具', error); continue }
         for (const t of [].concat(r || [])) {
           if (!t || !t.name) continue
+          // Explicit current-QQ operations, not a name-prefix ban: platform-neutral
+          // tools (including legacy qq_draw_image) keep their normal implementation.
+          const currentQq = new Set(['qq_chat_history', 'qq_get_profile', 'qq_send_avatar', 'qq_set_nickname', 'qq_set_signature', 'qq_set_avatar', 'qq_handle_friend_request', 'qq_whitelist', 'qq_group_admin', 'qq_import_qq_stickers'])
+          if (where.chat?.platform && currentQq.has(t.name)) continue // registry accounts are not the legacy OneBot account
           if (names.has(t.name)) { log.debug(`工具 ${t.name} 重名，模块「${rec.id}」的没挂`); continue }
           names.add(t.name)
           out.push(t)
@@ -532,6 +536,7 @@ export function createModules({ ctx, core, getConfig, setConfig, logger, version
   function contextFor(args) {
     const parts = []
     for (const rec of live.values()) {
+      if (args.chat?.platform && rec.id === 'group-admin') continue
       for (const fn of rec.contexts) {
         try { const t = fn(args); if (t) parts.push(String(t)) } catch (error) {}
       }

@@ -119,6 +119,7 @@ const isUnsupportedEffort = (error) => {
   const msg = String((error && (error.message || error.code)) || '')
   return /UNSUPPORTED_REASONING_EFFORT|does not support reasoning effort|reasoning effort/i.test(msg)
 }
+const isUnsupportedTemperature = (error) => /unsupported parameter\s*:\s*["']?temperature|temperature.{0,40}(unsupported|not supported)/i.test(String(error?.message || error?.code || ''))
 
 async function runStream (llm, params) {
   let out = ''
@@ -163,12 +164,19 @@ export async function askModel (dsh, o) {
     temperature: o.temperature ?? 0.3,
   }
   let effort = await pickReasoningEffort(dsh, t.provider, t.model, o.reasoningEffort === undefined ? 'low' : o.reasoningEffort)
-  for (let attempt = 0; ; attempt++) {
+  let includeTemperature = true
+  for (;;) {
+    const params = { ...base, ...(effort ? { reasoningEffort: effort } : {}) }
+    if (!includeTemperature) delete params.temperature
     try {
-      return await runStream(llm, effort ? { ...base, reasoningEffort: effort } : base)
+      return await runStream(llm, params)
     } catch (error) {
+      if (includeTemperature && isUnsupportedTemperature(error)) {
+        includeTemperature = false
+        continue
+      }
       // 能力探测没查到 / 模型临时不认：去掉思考强度再来一次
-      if (attempt === 0 && effort && isUnsupportedEffort(error)) {
+      if (effort && isUnsupportedEffort(error)) {
         cacheReasoning(t.provider, t.model, null)
         effort = undefined
         continue

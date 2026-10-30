@@ -12,7 +12,7 @@ export default {
   files: ['features/companion.js'],
   setup(api) {
     const mood = createMood({ getConfig: api.config, dsh: api.dsh })
-    api.context(({ chat }) => (chat.kind === 'system' ? '' : mood.contextLine()))
+    api.context(({ chat }) => (chat.kind === 'system' ? '' : mood.contextLine(chat)))
     api.on('activity', (a) => {
       const cfg = api.config()
       if (a.kind === 'in' && a.text) mood.observe(a.text, a.nickname, { direct: a.direct, owner: a.owner })

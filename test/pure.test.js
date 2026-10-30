@@ -40,13 +40,28 @@ test('bubbleDelay 按下一条长短停顿', () => {
   assert.ok(bubbleDelay('x'.repeat(500), () => 1) <= 4500 * 1.3)
 })
 
-test('回复按行拆成多条气泡；列表、代码、长文不拆；最多 5 条', () => {
-  const NL = String.fromCharCode(10)
+test('回复按行拆成多条气泡；列表、代码、长文不拆；最多 5 条', () => {  const NL = String.fromCharCode(10)
   assert.deepEqual(parseReply(['白米饭！必须是白米饭', '别的都能省 饭不能省'].join(NL)).items.map((x) => x.value), ['白米饭！必须是白米饭', '别的都能省 饭不能省'])
   assert.equal(parseReply(['1. 打开设置', '2. 点插件', '3. 保存'].join(NL)).items.length, 1)
   const seven = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].join(NL)
   assert.equal(parseReply(seven).items.length, 5)
   assert.equal(parseReply(seven).items[4].value, ['e', 'f', 'g'].join(NL))
+})
+
+test('一长段话按句子拆成连发的几条（真人不发长段）', () => {
+  const long = '我今天去试了那家新开的店，人特别多。排队排了快半个小时才进去。结果白米饭卖完了，气死我了！'
+  const items = parseReply(long).items
+  assert.ok(items.length >= 2, '长段要拆开：' + items.map((x) => x.value).join(' / '))
+  assert.ok(items.every((x) => x.value.length <= 60), '每条都不能太长')
+  assert.equal(items.map((x) => x.value).join(''), long, '拆完拼回去还是原话，不能丢字')
+  // 短句、列表、代码、超长资料照旧整条发
+  assert.equal(parseReply('在呢').items.length, 1)
+  assert.equal(parseReply('好的。').items.length, 1)
+  // 通篇没句号、只用逗号串起来的长句，也在逗号处喘一口气（断开处的逗号不再带上）
+  const commaRaw = '我刚刚在刷B站看到了一个特别搞笑的视频，讲一只猫怎么也不会下楼梯，笑死我了，等下发给你看'
+  const comma = parseReply(commaRaw).items
+  assert.ok(comma.length >= 2, '逗号长句也要拆：' + comma.map((x) => x.value).join(' / '))
+  assert.equal(comma.map((x) => x.value).join('').replace(/[，,]/g, ""), commaRaw.replace(/[，,]/g, ""))
 })
 
 const base = (o) => ({

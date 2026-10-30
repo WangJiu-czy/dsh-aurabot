@@ -3,7 +3,9 @@
 import stickers from './stickers/index.js'
 import voice from './voice/index.js'
 import mood from './mood/index.js'
+import selfEvolution from './self-evolution/index.js'
 import memory from './memory/index.js'
+import angelMemory from './angel-memory/index.js'
 import qqTools from './qq-tools/index.js'
 import groupAdmin from './group-admin/index.js'
 import imagegen from './imagegen/index.js'
@@ -14,6 +16,11 @@ import bili from './bili/index.js'
 import song from './song/index.js'
 import profile from './profile/index.js'
 import contacts from './contacts/index.js'
+import douyinBridge from './douyin-bridge/index.js'
 import douyin from './douyin/index.js'
+import astrbotCompat from './astrbot-compat/index.js'
+import virtualLife from './virtual-life/index.js'
+import stickerSense from './sticker-sense/index.js'
+import blueFatFishImage from './blue-fat-fish-image/index.js'
 
-export const BUILTINS = [stickers, voice, mood, memory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, bili, song, profile, contacts, douyin]
+export const BUILTINS = [stickers, voice, mood, selfEvolution, memory, angelMemory, qqTools, groupAdmin, imagegen, diary, qzoneSocial, speakup, bili, song, profile, contacts, douyinBridge, douyin, astrbotCompat, virtualLife, stickerSense, blueFatFishImage]

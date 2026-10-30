@@ -90,17 +90,18 @@ test('浏览器：挑抖音标签页、多的抖音页要关掉；端口文件�
   assert.equal(browser.findBrowser('C:\\nope\\msedge.exe', () => false), '')
 })
 
-test('配置：总开关默认关；只剩 4 项权限且默认仅主人；1.0.x 的私信等设置清掉、主人抖音号留着，shareOwner 上限迁到 share', () => {
+test('配置：总开关默认关；权限默认仅主人；旧私信轮询设置清理、主人抖音号留着，shareOwner 上限迁到 share', () => {
   const c = normalize({})
   assert.equal(c.douyin.enabled, false)
   assert.deepEqual(c.douyin.caps, { like: 30, comment: 3, share: 5, atOwner: 3 })
   assert.deepEqual(DOUYIN_PERM_KEYS, ['douyinBrowse', 'douyinLike', 'douyinComment', 'douyinShareOwner', 'douyinDm'])
   for (const k of DOUYIN_PERM_KEYS) assert.equal(c.profilePerms[k], 'owner')
   assert.equal(c.profilePerms.douyinDm, 'owner', '主动私信默认仅主人')
-  const old = normalize({ douyin: { enabled: true, owner: { secUid: 'x', avatar: 'a.jpg' }, atOwnerOnLikeChance: 0.7, dmPollMinutes: 7, minimize: true, shareBias: 'off', caps: { like: 10, shareOwner: 2, dm: 5 } }, profilePerms: { douyinDm: 'all' } })
+  const old = normalize({ douyin: { enabled: true, owner: { secUid: 'x', avatar: 'a.jpg' }, atOwnerOnLikeChance: 0.7, ownerDm: true, dmPollMinutes: 7, minimize: true, shareBias: 'off', caps: { like: 10, shareOwner: 2, dm: 5 } }, profilePerms: { douyinDm: 'all' } })
   assert.deepEqual(old.douyin.owner, { input: '', secUid: 'x', uid: '', nickname: '', confirmedInput: '' })
   assert.equal(old.douyin.atOwnerOnLikeChance, undefined)
-  assert.equal(old.douyin.dmPollMinutes, 7, '看私信间隔这个设置又用上了，保留')
+  assert.equal(old.douyin.dmPollMinutes, undefined)
+  assert.equal(old.douyin.ownerDm, undefined)
   assert.equal(old.douyin.shareBias, 'stingy')
   assert.deepEqual(old.douyin.caps, { like: 10, comment: 3, share: 2, atOwner: 3 })
   assert.equal(old.profilePerms.douyinDm, 'owner', '旧版 douyinDm 含义不同，老配置回到默认仅主人')
@@ -426,97 +427,6 @@ test('自己刷 / 主人没开口：不强行分享；刷完也会照实说「�
   assert.doesNotMatch(prompts[0], /至少挑一个/)
 })
 
-test('抖音私信：第一次只记下旧消息不回；之后只回主人的新消息；回复里带 [去刷抖音] 就去刷一轮', async () => {
-  let t = Date.now()
-  const chat = [
-    { id: 'm1', uid: '4182', text: '昨天的话', at: t - 3600_000 },
-    { id: 'm2', uid: '999', text: '我是路人', at: t - 1000 },
-  ]
-  let reply = '好呀等我\n[去刷抖音]'
-  const { dy, fs, prompts } = setup({ owner: OWNER, siteOpts: { chat }, now: () => t, turn: () => reply })
-  let r = await dy.checkOwnerDms()
-  assert.equal(r.replied, 0)
-  assert.match(r.message, /第一次/)
-  assert.equal(fs.calls.dmUid, '4182', '按核对过的主人 uid 打开会话')
-  // 路人的新消息不回
-  chat.push({ id: 'm3', uid: '999', text: '在吗', at: t })
-  assert.equal((await dy.checkOwnerDms()).replied, 0)
-  assert.equal(fs.calls.dm.length, 0)
-  // 主人发了分享卡片 + 一句话
-  chat.push({ id: 'm4', uid: '4182', text: '', at: t, card: { awemeId: '7', title: '猫猫' } }, { id: 'm5', uid: '4182', text: '再给我分享个视频呗', at: t })
-  r = await dy.checkOwnerDms()
-  assert.equal(r.replied, 1)
-  assert.deepEqual(fs.calls.dm, ['好呀等我'], '[去刷抖音] 标记不发出去')
-  const dmPrompt = prompts.find((p) => /抖音私信/.test(p))
-  assert.match(dmPrompt, /主人：\[分享了抖音视频《猫猫》\]/)
-  assert.match(dmPrompt, /你：|主人：再给我分享个视频呗/)
-  assert.ok(await until(() => fs.calls.watch.length === 3), '回完就去刷了一轮')
-  // 同一条不回第二次
-  reply = '嗯'
-  assert.equal((await dy.checkOwnerDms()).replied, 0)
-  assert.equal(dy.state().history.filter((x) => x.kind === 'dm').length, 1)
-})
-
-test('抖音私信：没核对主人抖音号不看；定时按间隔看', async () => {
-  const none = setup()
-  assert.equal((await none.dy.checkOwnerDms()).ok, false)
-  let t = new Date(2026, 9, 28, 10, 0, 0).getTime()
-  const { dy, fs, cfg } = setup({ owner: OWNER, now: () => t, douyinOver: { autoBrowse: false, dmPollMinutes: 3 } })
-  cfg.speakUp.awakeFrom = 8
-  cfg.speakUp.awakeTo = 23
-  await dy.tick()
-  assert.equal(fs.calls.dms, 1)
-  t += 60_000
-  await dy.tick()
-  assert.equal(fs.calls.dms, 1, '没到 3 分钟不看')
-  t += 3 * 60_000
-  await dy.tick()
-  assert.equal(fs.calls.dms, 2)
-})
-
-test('抖音私信：一条都没读到时不做「第一次」初始化（免得之后把旧消息当新消息回）', async () => {
-  const chat = []
-  const { dy } = setup({ owner: OWNER, siteOpts: { chat }, turn: () => '在呢' })
-  const r = await dy.checkOwnerDms()
-  assert.equal(r.ok, false)
-  chat.push({ id: 'old', uid: '4182', text: '刚才的话', at: Date.now() - 60_000 })
-  const r2 = await dy.checkOwnerDms()
-  assert.match(r2.message, /第一次/, '读到消息后才初始化，旧消息不回')
-  assert.equal(r2.replied, 0)
-})
-
-test('抖音私信：回复没发出去时这条不算看过，下次再试；同一条最多试 3 次', async () => {
-  const t = Date.now()
-  const chat = [{ id: 'a', uid: '4182', text: '旧的', at: t - 3600_000 }]
-  const { dy, fs } = setup({ owner: OWNER, siteOpts: { chat }, turn: () => '在呢' })
-  await dy.checkOwnerDms()
-  chat.push({ id: 'b', uid: '4182', text: '111', at: t })
-  fs.calls.dmFail = 1
-  const r1 = await dy.checkOwnerDms()
-  assert.equal(r1.ok, false)
-  const r2 = await dy.checkOwnerDms()
-  assert.equal(r2.replied, 1, '下次检查重试成功')
-  assert.deepEqual(fs.calls.dm, ['在呢'])
-  assert.equal((await dy.checkOwnerDms()).replied, 0, '回过的不再回')
-  chat.push({ id: 'c', uid: '4182', text: '在吗', at: t })
-  fs.calls.dmFail = 99
-  for (let i = 0; i < 4; i++) await dy.checkOwnerDms()
-  fs.calls.dmFail = 0
-  assert.equal((await dy.checkOwnerDms()).replied, 0, '试了 3 次还不行就放弃这条')
-})
-
-test('抖音私信：提示词明说「没在刷、没写 [去刷抖音] 就别说在刷」（她以前会顺口说「我刚钻进推荐里」）', async () => {
-  const t = Date.now()
-  const chat = [{ id: 'a', uid: '4182', text: '旧的', at: t - 3600_000 }]
-  const { dy, prompts } = setup({ owner: OWNER, siteOpts: { chat }, turn: () => '在呢' })
-  await dy.checkOwnerDms()
-  chat.push({ id: 'b', uid: '4182', text: '在吗', at: t })
-  await dy.checkOwnerDms()
-  const p = prompts.find((x) => /抖音私信/.test(x))
-  assert.match(p, /你现在没在刷抖音/)
-  assert.match(p, /没写 \[去刷抖音\] 就不会去刷/)
-})
-
 test('主人亲口让她找视频：今天看满了也照样去刷一轮；自己刷 / 别人叫的照旧受上限管', async () => {
   const { dy, fs } = setup({ owner: OWNER, douyinOver: { maxWatchPerDay: 0 }, decisions: [{ i: 1 }, { i: 2 }, { i: 3 }] })
   const plain = await dy.run({ force: true })
@@ -596,36 +506,7 @@ test('主人要视频但挑选模型超时：仍分享已看过的视频，不�
   assert.equal(fs.calls.comment.length, 0)
 })
 
-test('发送状态不确定或多句发了一部分时不整轮重试', async () => {
-  for (const partial of [false, true]) {
-    const t = Date.now()
-    const chat = [{ id: 'a', uid: '4182', text: '旧的', at: t - 3600_000 }]
-    const { dy, fs } = setup({ owner: OWNER, siteOpts: { chat }, turn: () => partial ? '第一句\n第二句' : '在呢' })
-    await dy.checkOwnerDms()
-    chat.push({ id: 'b', uid: '4182', text: '在吗', at: t })
-    fs.sendDm = async (text) => {
-      if (partial && text === '第一句') { fs.calls.dm.push(text); return }
-      throw Object.assign(new Error('状态不确定'), { code: 'dm_uncertain' })
-    }
-    assert.equal((await dy.checkOwnerDms()).ok, false)
-    assert.equal((await dy.checkOwnerDms()).replied, 0)
-    assert.deepEqual(fs.calls.dm, partial ? ['第一句'] : [])
-  }
-})
-
 test('私信比较忽略表情和空白但不能把半句当完整', () => {
   assert.equal(site.dmComparable('好呀 👋\n马上去'), site.dmComparable('好呀马上去'))
   assert.notEqual(site.dmComparable('得令 主人的命令最大'), site.dmComparable('得令 主人的命令最大 我这就去'))
-})
-
-test('私信里让她去刷、却没刷成：在私信里照实跟主人说一声（以前「我这就去翻」之后就没下文了）', async () => {
-  const t = Date.now()
-  const chat = [{ id: 'a', uid: '4182', text: '旧的', at: t - 3600_000 }]
-  const { dy, fs, prompts } = setup({ owner: OWNER, siteOpts: { chat, feed: [] }, turn: (p) => (/没刷成/.test(p) ? '刚才没刷成 推荐里没刷到新的' : '得令\n[去刷抖音]') })
-  await dy.checkOwnerDms()
-  chat.push({ id: 'b', uid: '4182', text: '刷会儿抖音给我找个视频', at: t })
-  await dy.checkOwnerDms()
-  assert.ok(await until(() => fs.calls.dm.length === 2), '先回「得令」，没刷成再说一声')
-  assert.deepEqual(fs.calls.dm, ['得令', '刚才没刷成 推荐里没刷到新的'])
-  assert.ok(prompts.some((p) => /没刷成/.test(p)))
 })

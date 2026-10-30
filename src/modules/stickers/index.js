@@ -6,6 +6,9 @@ import { createStickerStore, stickerPath } from '../../features/stickers.js'
 import { defineTool, str } from '../../tools/tools.js'
 import { fetchImage, segmentBytes } from '../../core/net.js'
 import { resolvePainting } from '../../features/paintings.js'
+import { deliveryConfirmed } from '../../chat/im-context.js'
+import { createDouyinMedia } from '../../douyin/im-media.js'
+import { dataDir } from '../../core/store.js'
 
 export default {
   id: 'stickers',
@@ -30,7 +33,7 @@ export default {
           required: ['name'],
           execute: async ({ name }) => {
             const ok = await hub.sendSticker(current, String(name || ''))
-            return ok ? { ok: true, message: '发了' } : { ok: false, message: '表情库里没找到合适的' }
+            return deliveryConfirmed(ok, chat) ? { ok: true, message: '发了' } : { ok: false, sent: false, status: ok?.status || 'failed', code: ok?.code, message: '没有确认表情投递；不自动重发' }
           },
         })] : []),
         defineTool({
@@ -55,6 +58,7 @@ export default {
           },
           required: ['sticker'],
           execute: async ({ sticker, new_name, tags, delete: del }) => {
+            if (chat.platform) return { ok: false, code: 'QQ_STICKER_MUTATION_GAP', message: '此表情库的改名/删除会写回QQ，当前平台不执行' }
             const item = store.match(String(sticker || ''))
             if (!item) return { ok: false, message: '表情库里没找到这张' }
             const label = item.name || item.md5.slice(0, 8)
@@ -96,9 +100,12 @@ export default {
             // 优先主人自己发的，其次这个聊天里最近的
             const pick = media.filter((x) => x.userId === String(api.config().ownerQQ)).at(-1) || media.at(-1)
             if (!pick) return { ok: false, message: '最近半小时这个聊天里没有人发表情或图片，先把那张发过来' }
-            buf = await segmentBytes(pick.seg, api.core.onebot, { maxBytes: 5 * 1024 * 1024 })
+            if (chat.platform) {
+              if (!(pick.seg.data?.bytes instanceof Uint8Array) || pick.seg.data.bytes.length > 5 * 1024 * 1024) return { ok: false, code: 'MEDIA_BYTES_INVALID' }
+              buf = Buffer.from(pick.seg.data.bytes)
+            } else buf = await segmentBytes(pick.seg, api.core.onebot, { maxBytes: 5 * 1024 * 1024 })
           }
-          const r = await store.addFromBuffer(buf, { name: String(name || '').slice(0, 12), tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool' })
+          const r = await store.addFromBuffer(buf, { name: String(name || '').slice(0, 12), tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool', toQQ: !chat.platform })
           if (!r.ok) return { ok: false, message: r.reason || '没存成' }
           if (r.existed) return { ok: true, message: `库里已经有这张了（叫「${r.item.name || '未命名'}」）` }
           return { ok: true, message: `存好了${r.item.name ? '「' + r.item.name + '」' : ''}` }
@@ -119,8 +126,8 @@ export default {
         properties: { source: str('本地路径或 http(s) 地址'), name: str('备注（≤12 字）'), tags: { type: 'array', items: { type: 'string' }, description: '标签，如 开心/委屈' } },
         required: ['source'],
         execute: async ({ source, name, tags }) => {
-          const buf = await fetchImage(String(source), { maxBytes: 5 * 1024 * 1024 })
-          const r = await store.addFromBuffer(buf, { name: name || '', tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool' })
+          const buf = chat.platform ? Buffer.from(await createDouyinMedia({ roots: () => [dataDir('imagegen'), dataDir('stickers')] }).bytes(String(source))) : await fetchImage(String(source), { maxBytes: 5 * 1024 * 1024 })
+          const r = await store.addFromBuffer(buf, { name: name || '', tags: Array.isArray(tags) ? tags.slice(0, 3) : [], from: 'tool', toQQ: !chat.platform })
           return r.ok ? { ok: true, message: r.existed ? '库里已经有这张了' : `收好了「${r.item.name || '未命名'}」` } : { ok: false, message: r.reason }
         },
       }))

@@ -89,6 +89,25 @@ test('万一还是被拒：去掉 reasoningEffort 自动重试一次', async () 
   assert.equal(await modelReasoning(dsh, 'p', 'm'), null)
 })
 
+test('模型拒绝 temperature 时移除该参数并重试一次', async () => {
+  clearReasoningCache()
+  const { dsh, calls } = fakeDsh({
+    reasoning: null,
+    stream: async function * (params) {
+      if ('temperature' in params) {
+        yield { type: 'finish', reason: { kind: 'error', failure: { code: '400', message: '{"detail":"Unsupported parameter: temperature"}' } } }
+        return
+      }
+      yield { type: 'text-delta', text: '第二次成功' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    },
+  })
+  assert.equal(await askModel(dsh, { cfg: CFG, text: '起个名字', temperature: 0.2 }), '第二次成功')
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].temperature, 0.2)
+  assert.equal('temperature' in calls[1], false)
+})
+
 test('能力结果有缓存，不会每次都去问适配器', async () => {
   clearReasoningCache()
   const { dsh, lookups } = fakeDsh({ reasoning: { efforts: [{ id: 'low' }] } })

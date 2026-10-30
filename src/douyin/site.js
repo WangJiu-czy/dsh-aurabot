@@ -2,6 +2,7 @@
 // 不读屏、不截图；点赞 / 评论在视频页上真点按钮，再等接口返回确认成没成功。
 
 import { setTimeout as sleep } from 'node:timers/promises'
+import { findConfirmation } from './ego-browser.js'
 
 const HOME = 'https://www.douyin.com/'
 export const videoLink = (id) => `https://www.douyin.com/video/${id}`
@@ -113,8 +114,18 @@ export const VERIFY_PROBE = `(() => {
   return t || '页面弹了验证码'
 })()`
 
-export function createSite({ browser, log }) {
+export function createSite({ browser, log, wait = sleep }) {
   const b = browser
+  let accountUid = '', chatUid = ''
+  // Listening + dispatch + response body stay inside one transport round. No Promise crosses CLI processes.
+  async function runWrite(urlRe, action, timeoutMs) {
+    let receipt
+    try { receipt = await b.runAction({ urlRe, action, timeoutMs }) }
+    catch (error) { throw Object.assign(new Error('网页发送状态不确定，暂停重试'), { code: 'dm_uncertain', mayHaveLateEffects: true }) }
+    if (receipt?.status === 'failed') throw Object.assign(new Error('页面上找不到发送目标'), { code: 'action_missing' })
+    if (receipt?.status !== 'observed') throw Object.assign(new Error('网页发送状态不确定，暂停重试'), { code: 'dm_uncertain', mayHaveLateEffects: true })
+    return receipt.response
+  }
 
   /** 浏览器连上并停在抖音域名下（接口要同源才带登录态）。 */
   async function ensure() {
@@ -123,7 +134,7 @@ export function createSite({ browser, log }) {
     const href = String(await b.evaluate('location.href').catch(() => ''))
     if (!/^https:\/\/www\.douyin\.com\//.test(href)) {
       await b.goto(HOME)
-      await sleep(1500)
+      await wait(1500)
     }
     return { ok: true }
   }
@@ -148,8 +159,10 @@ export function createSite({ browser, log }) {
     try {
       const j = await api('/aweme/v1/web/user/profile/self/', { publish_video_strategy_type: 2, source: 'channel_pc_web', personal_center_strategy: 1 })
       const u = j.user || {}
-      return u.sec_uid ? { secUid: String(u.sec_uid), nickname: clean(u.nickname, 40), uid: String(u.uid || '') } : null
+      accountUid = typeof u.uid === 'string' && /^\d+$/.test(u.uid) ? u.uid : ''
+      return u.sec_uid ? { secUid: String(u.sec_uid), nickname: clean(u.nickname, 40), uid: accountUid } : null
     } catch (error) {
+      accountUid = ''
       if (error.code === 'login') return null
       throw error
     }
@@ -207,7 +220,7 @@ export function createSite({ browser, log }) {
   async function watch(id, ms) {
     await openVideo(id)
     await b.evaluate(`document.querySelectorAll(${JSON.stringify(scope(id) + ' video')}).forEach((v) => { v.muted = true; v.play && v.play().catch(() => {}) })`).catch(() => {})
-    await sleep(ms)
+    await wait(ms)
   }
 
   /** 点赞：已经赞过就不点（再点会变成取消）；点完等接口确认。 */
@@ -217,9 +230,7 @@ export function createSite({ browser, log }) {
     const btn = await b.waitFor(sel, 10000)
     if (!btn) throw new Error('页面上找不到点赞按钮')
     if (/digged/.test(btn.state) && !/no-digged/.test(btn.state)) return { ok: true, already: true }
-    const resp = b.waitResponse(/\/aweme\/v1\/web\/commit\/item\/digg\//, 10000)
-    await b.press(sel)
-    const r = await resp
+    const r = await runWrite(/\/aweme\/v1\/web\/commit\/item\/digg\//, { type: 'press', selector: sel }, 10000)
     checkWrite(r, '点赞')
     return { ok: true }
   }
@@ -239,7 +250,7 @@ export function createSite({ browser, log }) {
     if (!(await b.evaluate(`Boolean(document.querySelector('.comment-input-inner-container'))`))) throw new Error('评论框没打开')
     for (let i = 0; i < 4; i++) {
       await b.press('.comment-input-inner-container')
-      await sleep(300)
+      await wait(300)
       const ok = await b.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(EDITOR)}); if (!e) return false; e.focus(); return document.activeElement === e })()`)
       if (ok) return
     }
@@ -255,7 +266,7 @@ export function createSite({ browser, log }) {
     const want = JSON.stringify({ secUid: who.secUid, uid: who.uid })
     let picked = null
     for (let i = 0; i < 12 && !picked?.ok; i++) {
-      await sleep(500)
+      await wait(500)
       picked = await b.evaluate(`(() => {
         const want = ${want}
         const of = (n) => {
@@ -274,7 +285,7 @@ export function createSite({ browser, log }) {
         return { ok: true }
       })()`).catch(() => null)
     }
-    await sleep(400)
+    await wait(400)
     const tagged = await b.evaluate(`[...document.querySelectorAll(${JSON.stringify(EDITOR + ' .douyin_mention_word')})].some((n) => n.innerText.trim() === ${JSON.stringify('@' + who.nickname)})`).catch(() => false)
     if (picked?.ok && tagged) return true
     await clearEditor()
@@ -291,7 +302,7 @@ export function createSite({ browser, log }) {
     if ((await editorText()).trim()) await clearEditor() // 上次没发出去的残留
     if (at) await mention(at)
     await b.type(text)
-    await sleep(500 + Math.random() * 800)
+    await wait(500 + Math.random() * 800)
     // 发送：点评论框右边的红色箭头（打了字才出现，是那一排图标里最右边的一个）。页面看不见时回车不管用，所以不靠回车
     const marked = await b.evaluate(`(() => {
       let bar = document.querySelector('.comment-input-inner-container')
@@ -301,10 +312,7 @@ export function createSite({ browser, log }) {
       if (send) send.setAttribute('data-aurabot', 'send')
       return Boolean(send)
     })()`).catch(() => false)
-    const resp = b.waitResponse(/\/aweme\/v1\/web\/comment\/publish/, 12000)
-    if (marked) await b.press('[data-aurabot="send"]')
-    else await b.pressEnter()
-    const r = await resp
+    const r = await runWrite(/\/aweme\/v1\/web\/comment\/publish/, marked ? { type: 'press', selector: '[data-aurabot="send"]' } : { type: 'enter' }, 12000)
     try {
       checkWrite(r, '评论')
     } catch (error) {
@@ -351,7 +359,7 @@ export function createSite({ browser, log }) {
     for (let tries = 0; tries < 2 && !hit?.found; tries++) {
       if (!(await b.press(`${scope(id)} [data-e2e="video-player-share"]`))) throw new Error('页面上找不到分享按钮')
       for (let i = 0; i < 16 && !hit?.found; i++) {
-        await sleep(500)
+        await wait(500)
         hit = await findRow()
       }
     }
@@ -367,22 +375,17 @@ export function createSite({ browser, log }) {
       if (searched) {
         await b.type(who.nickname)
         for (let i = 0; i < 10 && !hit?.found; i++) {
-          await sleep(600)
+          await wait(600)
           hit = await findRow()
         }
       }
     }
     if (!hit?.found) throw Object.assign(new Error('分享面板里没找到主人（可能互相没关注、私信不通）'), { code: 'share' })
     const sent = /\/v1\/message\/send/
-    const already = Boolean(hit.done) // 这个视频之前就分享给他过了，不再重复分享
-    if (!already) {
-      const resp = b.waitResponse(sent, 12000)
-      await b.press('[data-aurabot="share-to"]')
-      const r = await resp
-      if (!r) throw new Error('点了分享，但没等到抖音私信的回应')
-      if (r.status !== 200) throw new Error(`抖音私信没发出去（HTTP ${r.status}）`)
-    }
-    return { ok: true, already }
+    // UI labels alone are neither a platform receipt nor permission to send again.
+    if (hit.done) throw Object.assign(new Error('页面显示已分享，等待私信收据核对'), { code: 'dm_uncertain' })
+    const receipt = await confirmedDm(sent, { type: 'press', selector: '[data-aurabot="share-to"]' }, { accountId: accountUid, targetUid: who.uid, awemeId: String(id) }, 12000)
+    return { ...receipt, already: false }
   }
 
   // ---------- 私信（独立聊天页 douyin.com/chat） ----------
@@ -391,6 +394,7 @@ export function createSite({ browser, log }) {
 
   /** 打开和某人的私信会话：会话 id 是「0:1:双方 uid」，按 uid 认人。页面在后台时列表要十几秒才出来。 */
   async function openChat(uid, { secUid = '' } = {}) {
+    chatUid = ''
     if (!String(await b.evaluate('location.href').catch(() => '')).startsWith(CHAT)) await b.goto(CHAT)
     let found = false
     for (let i = 0; i < 40 && !found; i++) {
@@ -418,13 +422,14 @@ export function createSite({ browser, log }) {
         hit.setAttribute('data-aurabot', 'conv')
         return true
       })()`).catch(() => false)
-      if (!found) await sleep(1000)
+      if (!found) await wait(1000)
     }
     // 列表里没有：用主页的「私信」按钮开一个新会话（陌生人也能主动发起）
     if (!found && secUid) found = await openFromProfile(secUid)
     if (!found) throw Object.assign(new Error('私信列表里没找到这个人，主页也没有可用的「私信」入口（可能对方关闭了私信）'), { code: 'dm' })
     await b.press('[data-aurabot="conv"]')
-    await sleep(1500)
+    chatUid = typeof uid === 'string' && /^\d+$/.test(uid) ? uid : ''
+    await wait(1500)
   }
 
   /** 打开某人的主页，点「私信」发起会话（列表里还没有的陌生人）。只打开会话，不发消息。 */
@@ -447,7 +452,7 @@ export function createSite({ browser, log }) {
           return true
         })()`).catch(() => false)
         if (ok) return true
-        await sleep(1000)
+        await wait(1000)
       }
       return false
     })()
@@ -455,7 +460,7 @@ export function createSite({ browser, log }) {
     await b.press('[data-aurabot="dm-open"]')
     // 点完可能停在私信页，也可能弹出会话：等到输入框出现，再按 uid 核对一次会话
     for (let i = 0; i < 20; i++) {
-      await sleep(1000)
+      await wait(1000)
       const href = String(await b.evaluate('location.href').catch(() => ''))
       // URL 可能不带 isPopup 参数，按域名 + 路径判断，再看输入框是否真的出现
       if (/^https:\/\/www\.douyin\.com\/chat/.test(href) && await b.evaluate(`Boolean(document.querySelector('.editor-kit-container[contenteditable="true"]'))`).catch(() => false)) return true
@@ -472,16 +477,26 @@ export function createSite({ browser, log }) {
         let m = null
         for (let f = n[k], j = 0; f && j < 3 && !m; f = f.return, j++) { const v = f.memoizedProps && f.memoizedProps.message; if (v && typeof v === 'object' && 'isMyMessage' in v) m = v }
         if (!m) continue
-        const id = String(m.serverId ?? '')
+        const id = typeof m.serverId === 'string' ? m.serverId : ''
         if (!id || seen.has(id)) continue
         seen.add(id)
         const p = m.parsedContent || {}
         const at = m.createdAt instanceof Date ? m.createdAt.getTime() : Number(m.createdAt) || 0
-        out.push({ id, uid: String(m.sender ?? ''), mine: m.isMyMessage === true, text: String(p.text || '').slice(0, 500), at, card: p.itemId ? { awemeId: String(p.itemId), title: String(p.content_title || '').slice(0, 80) } : null })
+        out.push({ id, conversationId: String(m.conversationId || ''), uid: String(m.sender ?? ''), mine: m.isMyMessage === true, text: String(p.text || '').slice(0, 500), at, card: p.itemId ? { awemeId: String(p.itemId), title: String(p.content_title || '').slice(0, 80) } : null })
       }
       return out.sort((a, c) => a.at - c.at)
     })()`).catch(() => [])
     return Array.isArray(list) ? list : []
+  }
+
+  async function confirmedDm(urlRe, action, expected, timeoutMs) {
+    // A binary/empty HTTP 200 is not an IM application ACK. Only a new matching server message is evidence.
+    if (!expected.accountId || !expected.targetUid) throw Object.assign(new Error('网页账号与目标UID待核对'), { code: 'uid_required' })
+    const before = await readChat(), startedAt = Date.now()
+    try { await runWrite(urlRe, action, timeoutMs) } catch (error) { if (error.code !== 'dm_uncertain') throw error }
+    const messageId = findConfirmation(before, await readChat(), expected, startedAt)
+    if (!messageId) throw Object.assign(new Error('私信发送状态不确定，已暂停重试，避免重复发送'), { code: 'dm_uncertain' })
+    return { ok: true, messageId }
   }
 
   /** 和这个人的私信：打开会话、读最近的消息（页面在后台时消息要过一会儿才加载出来，等一等）。 */
@@ -490,7 +505,7 @@ export function createSite({ browser, log }) {
     let list = []
     for (let i = 0; i < 15 && !list.length; i++) {
       list = await readChat()
-      if (!list.length) await sleep(1000)
+      if (!list.length) await wait(1000)
     }
     return list
   }
@@ -511,45 +526,12 @@ export function createSite({ browser, log }) {
     for (let tries = 0; ; tries++) {
       await b.clearFocused()
       await b.type(text)
-      await sleep(400 + Math.random() * 600)
+      await wait(400 + Math.random() * 600)
       const typed = await inBox()
       if (dmEqual(typed, text)) break
       if (tries >= 1) { await b.clearFocused().catch(() => {}); throw new Error('私信输入框里的字对不上，没发') }
     }
-    const startedAt = Date.now()
-    const sent = /\/v1\/message\/send/
-    let resp = b.waitResponse(sent, 8000)
-    await b.pressEnter()
-    let r = await resp
-    // 没等到回执不代表失败，不能再点一次发送（IM 可能自动重发）。
-    // 只认本账号、发送开始之后的新消息；不能拿主人说过的同一句当成功。
-    if (!r) {
-      await sleep(1500)
-      const mine = (await readChat()).some((m) => m.mine && m.at >= startedAt - 2000 && dmEqual(m.text, text))
-      if (mine) return { ok: true }
-      const remaining = await inBox()
-      // 仍完整留在输入框，且没有新消息：回车没触发发送，可安全点击一次按钮。
-      if (dmEqual(remaining, text)) {
-        const marked = await b.evaluate(`(() => { const s = document.querySelector('[class*="publishBtn"]'); if (!s) return false; s.setAttribute('data-aurabot', 'dm-send'); return true })()`).catch(() => false)
-        if (marked) {
-          const response = b.waitResponse(sent, 8000)
-          await b.press('[data-aurabot="dm-send"]')
-          r = await response
-          if (!r) {
-            await sleep(1500)
-            const confirmed = (await readChat()).some((m) => m.mine && m.at >= startedAt - 2000 && dmEqual(m.text, text))
-            if (confirmed) return { ok: true }
-          }
-        }
-      }
-      if (!r) throw Object.assign(new Error('私信发送状态不确定，已暂停重试，避免重复发送'), { code: 'dm_uncertain' })
-    }
-    if (r.status !== 200) {
-      await b.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(DM_EDIT)}); e && e.focus() })()`).catch(() => {})
-      await b.clearFocused().catch(() => {}) // 没发出去的字别留在框里，免得下次接在后面
-      throw new Error(`私信没发出去（HTTP ${r.status}）`)
-    }
-    return { ok: true }
+    return confirmedDm(/\/v1\/message\/send/, { type: 'enter' }, { accountId: accountUid, targetUid: chatUid, text }, 8000)
   }
 
   /** 按 sec_uid 查一个人（@ 之前拿最新昵称；核对主人用）。 */
@@ -574,7 +556,7 @@ export function createSite({ browser, log }) {
         const href = String(await b.evaluate('location.href').catch(() => ''))
         const sec = href.match(/douyin\.com\/user\/(MS4w[\w-]+)/)?.[1]
         if (sec) return user(sec)
-        await sleep(1000)
+        await wait(1000)
       }
       throw new Error('这个链接不是抖音主页（或者没跳过去）')
     }

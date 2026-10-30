@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startMockOneBot } from './helpers/mock-onebot.js'
 import { createFakeDsh } from './helpers/fake-dsh.js'
+import { mapMemeMarkers } from '../src/modules/astrbot-compat/meme-markers.js'
 
 const OWNER = '10000001'
 const BOT = '20000002'
@@ -104,6 +105,50 @@ after(async () => {
   fake?.dispose()
   await mock?.close()
   setTimeout(() => process.exit(0), 200).unref()
+})
+
+test('Persona Sim 内置模块：主人命令可读状态，近况按会话隔离', async () => {
+  const status = await mod('self-evolution')
+  assert.equal(status.running, 'builtin')
+  assert.ok(status.commands.includes('ps'))
+  mock.push(priv('/ps status'))
+  await until(() => sentTo(OWNER).some((text) => text.includes('Persona Sim：活力') && text.includes('脑内待办')))
+  const sim = api.modules.use('self-evolution')
+  for (let i = 0; i < 11; i++) sim.interact(`private:${OWNER}`, 'bad')
+  const own = sim.snapshot(`private:${OWNER}`)
+  const other = sim.snapshot('private:999999')
+  assert.ok(own.state.energy < 30)
+  assert.equal(other.state.energy, 80, '不同聊天的 Persona Sim 状态隔离')
+  const panel = await fake.call('/state').then((r) => r.json())
+  assert.ok(panel.selfEvolution?.state && Array.isArray(panel.selfEvolution.effects) && Array.isArray(panel.selfEvolution.todos), '面板 overview 暴露主人私聊的状态卡数据')
+  assert.equal(panel.selfEvolution.prompt, undefined, '面板只拿展示字段')
+  assert.match(api.modules.contextFor({ chat: { chatId: `private:${OWNER}`, kind: 'private' }, sessionId: 'test' }), /Persona Sim 近况/)
+  mock.push(priv('/ps reset'))
+  await until(() => sentTo(OWNER).some((text) => text.includes('Persona Sim 状态已重置')))
+  assert.ok(Math.abs(sim.snapshot(`private:${OWNER}`).state.energy - 80) < 0.01, '主人可清除当前会话状态')
+
+})
+
+test('Angel Memory 提供按聊天范围隔离的知识库搜索', async () => {
+  assert.equal((await mod('angel-memory')).running, 'builtin')
+  const shared = await fake.call('/angel-memory/knowledge/add', { title: '副本攻略', domain: '游戏', content: '周五副本组队攻略。', scope: 'shared' }).then((r) => r.json())
+  const local = await fake.call('/angel-memory/knowledge/add', { title: '群内安排', domain: '聊天', content: '周五副本晚上七点开。', scope: 'group:777' }).then((r) => r.json())
+  await fake.call('/angel-memory/knowledge/add', { title: '私密安排', domain: '聊天', content: '周五副本不要外传。', scope: 'group:888' })
+  assert.ok(shared.ok && local.ok)
+  const chat = { kind: 'group', chatId: 'group:777', userId: '10000003' }
+  const tool = api.modules.buildTools({ chat }).find((x) => x.name === 'angel_knowledge_search')
+  assert.ok(tool)
+  const result = await tool.execute({ query: '周五副本' })
+  assert.deepEqual(result.results.map((x) => x.id).sort(), [shared.id, local.id].sort())
+  assert.equal(api.modules.buildTools({ chat }).some((x) => x.name === 'angel_knowledge_save'), false, '群聊不挂保存工具')
+  const ownerChat = { kind: 'private', chatId: `private:${OWNER}`, userId: OWNER }
+  const ownerTools = api.modules.buildTools({ chat: ownerChat })
+  const saved = await ownerTools.find((x) => x.name === 'angel_knowledge_save').execute({ title: '主人私聊资料', content: '主人私有短语' })
+  assert.ok(saved.ok)
+  assert.equal((await ownerTools.find((x) => x.name === 'angel_knowledge_read').execute({ id: saved.id })).note.content, '主人私有短语')
+  assert.equal((await tool.execute({ query: '主人私有短语' })).results.length, 0, '私聊资料不会泄漏到群聊')
+  const panel = await fake.call('/angel-memory/knowledge?q=周五').then((r) => r.json())
+  assert.equal(panel.items.length, 3)
 })
 
 test('自己写的模块加载了；同名的替换了内置的；关掉的内置模块没在跑', async () => {
@@ -452,4 +497,53 @@ test('#52 模块 API：api.sendVoiceFile 把音频文件当语音条发', async 
   await fake.call('/ext/sender/voice')
   const call = mock.sent('send_private_msg').filter((c) => c.params.message.some((s) => s.type === 'record' && String(s.data.file).startsWith('base64://'))).at(-1)
   assert.ok(call, '语音条发出去了')
+})
+
+test('AstrBot meme_manager：主人可导入图包，分类标记最终发出图片段', async () => {
+  const before = await mod('astrbot-compat')
+  assert.ok(before.commands.includes('meme-pack'), '需要主人可调用的导包命令')
+
+  const oldFetch = globalThis.fetch
+  const manifest = { id: 'smoke-pack', name: 'Smoke', version: '1.0.0', categories: { happy: { description: '开心' } } }
+  const tree = { truncated: false, tree: [{ type: 'blob', path: 'manifest.json' }, { type: 'blob', path: 'memes/happy/face.png' }] }
+  globalThis.fetch = async (url) => {
+    const value = String(url)
+    if (value.includes('/git/trees/')) return new Response(JSON.stringify(tree))
+    if (value.endsWith('/manifest.json')) return new Response(JSON.stringify(manifest))
+    if (value.endsWith('/face.png')) return new Response(fakePng(180, 180, 73))
+    throw new Error(`unexpected fetch ${value}`)
+  }
+  try {
+    const sentBefore = sentTo(OWNER).length
+    mock.push(priv('/meme-pack owner/repo main .'))
+    await until(() => sentTo(OWNER).length > sentBefore)
+    assert.match(sentTo(OWNER).at(-1), /已导入图包「Smoke」/)
+  } finally { globalThis.fetch = oldFetch }
+  assert.match(fake.variables.get('aurabot_rules_private')(), /&&分类名&&/, '导入后把可用分类提示给模型')
+
+  await api.hub.deliver(`private:${OWNER}`, '你好 &&happy&&')
+  await until(() => mock.sent('send_private_msg').some((call) => call.params.message.some((segment) => segment.type === 'image')))
+})
+
+test('AstrBot meme_manager 标记解析：只映射代码外且有效的分类标记', () => {
+  assert.equal(mapMemeMarkers('hi &&happy&&', (x) => `<sticker:${x}>`), 'hi <sticker:happy>')
+  assert.equal(mapMemeMarkers('`&&happy&&`', () => '<sticker:happy>'), '`&&happy&&`')
+  assert.equal(mapMemeMarkers('```txt\n&&happy&&\n```', () => '<sticker:happy>'), '```txt\n&&happy&&\n```')
+  assert.equal(mapMemeMarkers('\\&&happy&&', () => '<sticker:happy>'), '\\&&happy&&')
+})
+
+test('AstrBot meme_manager 联动适配：按 Aurabot 消息会话发送并支持两段式接口', async () => {
+  const bridge = api.astrbotCompat
+  assert.ok(bridge)
+  assert.equal(bridge.context.get_registered_star('other'), null)
+  const star = bridge.context.get_registered_star('meme_manager')
+  assert.equal(typeof star.star_cls.compat_send_message, 'function')
+  const message = { kind: 'private', chatId: `private:${OWNER}`, userId: OWNER, text: '你好' }
+  const event = bridge.event(message)
+  await star.star_cls.compat_send_message(event, '来自兼容接口')
+  await until(() => sentTo(OWNER).includes('来自兼容接口'))
+  const prepared = await star.star_cls.compat_prepare_message(event, [{ type: 'text', data: { text: '分步文本' } }])
+  assert.equal(prepared.cleaned_chain.chain[0].data.text, '分步文本')
+  await star.star_cls.compat_send_prepared_message(event, prepared)
+  await until(() => sentTo(OWNER).includes('分步文本'))
 })

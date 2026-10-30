@@ -120,11 +120,42 @@ export function splitLines(text) {
   if (!t) return []
   if (t.includes('```') || t.length > 240) return [t]
   const lines = t.split(/\n+/).map((s) => s.trim()).filter(Boolean)
-  if (lines.length <= 1) return lines
+  if (lines.length <= 1) return splitSentences(t)
   // 像列表 / 步骤的多行内容（一大半以数字或符号开头）也整段发
   const listy = lines.filter((l) => /^(\d+[.、)]|[-*•·])/.test(l)).length
   if (listy >= Math.ceil(lines.length / 2)) return [t]
   return lines
+}
+
+// 一句话超过这个长度就不像一个真人随手打的，按句子拆成连发的几条
+const MAX_ONE_BUBBLE = 40
+const MAX_SENTENCE_BUBBLES = 4
+
+/** 没有换行的一整段：太长就按句号问号这类断点拆成连发的几条（真人不发长段）。 */
+function splitSentences(t) {
+  if (t.length <= MAX_ONE_BUBBLE) return [t]
+  const parts = t.split(/(?<=[。！？!?…~～])/).map((s) => s.trim()).filter(Boolean)
+  // 通篇没有句末标点、只是逗号串成一条的长句：找个逗号喘口气
+  if (parts.length <= 1) return splitAtComma(t)
+  const out = []
+  for (const p of parts) {
+    // 太短的碎片（「嗯。」「啊！」）粘回上一条，别拆得稀碎
+    if (out.length && (p.length < 5 || out[out.length - 1].length + p.length <= MAX_ONE_BUBBLE)) out[out.length - 1] += p
+    else out.push(p)
+  }
+  if (out.length <= MAX_SENTENCE_BUBBLES) return out
+  return [...out.slice(0, MAX_SENTENCE_BUBBLES - 1), out.slice(MAX_SENTENCE_BUBBLES - 1).join('')]
+}
+
+/** 长句按逗号切成两条：前半句短、后半句留着，读起来像真人发到一半又接一句。 */
+function splitAtComma(t) {
+  const commas = [...t.matchAll(/[，,]/g)].map((m) => m.index)
+  const cut = commas.find((i) => i >= 12 && i <= MAX_ONE_BUBBLE + 8)
+  if (cut === undefined) return [t]
+  const head = t.slice(0, cut).trim()
+  const rest = t.slice(cut + 1).trim()
+  if (!head || !rest) return [t]
+  return [head, rest]
 }
 
 function pushText(items, s) {

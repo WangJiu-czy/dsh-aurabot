@@ -3,9 +3,49 @@
 //   /** @type {import('../aurabot').AurabotModule} */
 // VS Code 等编辑器就会给 api.* 补全和参数说明。完整说明见同目录的 API.md。
 
-export type ChatId = `private:${string}` | `group:${string}` | `system:${string}`
+export type ChatId = `private:${string}` | `group:${string}` | `system:${string}` | `[${string}]`
+
+export interface ImActor { readonly platform: string; readonly accountId: string; readonly senderId: string }
+export interface ImMessage extends ImAdapterTarget {
+  sender: { id: string; name?: string }
+  messageId: string
+  parts: Array<{ type: string; text?: string; [key: string]: any }>
+  replyTo?: { messageId: string }
+  timestamp?: number
+  mentioned?: boolean
+  /** Assigned by the registered adapter generation, never accepted as an actor claim. */
+  generation?: number
+}
+export type ImReceipt = { status: 'confirmed'; messageId: string } | { status: 'failed'; code?: string } | { status: 'uncertain' }
+export type MemoryScope =
+  | ({ kind: 'conversation' } & ImAdapterTarget)
+  | { kind: 'person-private'; platform: string; accountId: string; senderId: string }
+  | { kind: 'shared'; audience: 'owner-private' | 'all-conversations' | Array<ImAdapterTarget | (ImAdapterIdentity & { senderId: string })>; publishTo?: 'qq-public' }
+
+export interface ImAdapterIdentity { platform: string; accountId: string }
+export interface ImConversation { kind: string; id: string; [key: string]: any }
+export interface ImAdapterTarget extends ImAdapterIdentity { conversation: ImConversation }
+export interface ImAdapterEvent extends ImAdapterTarget {
+  sender?: any
+  message?: any
+  raw?: any
+  [key: string]: any
+}
+export interface ImAdapterRegistry {
+  subscribe(handler: (event: ImAdapterEvent) => any | Promise<any>): Off
+  generation(identity: ImAdapterIdentity): number | undefined
+  register(identity: ImAdapterIdentity, adapter: { send(target: ImAdapterTarget, message: any): any | Promise<any> }): Off
+  onMessage(identity: ImAdapterIdentity, handler: (event: ImAdapterEvent) => any | Promise<any>): Off
+  send(target: ImAdapterTarget, message: any): any | Promise<any>
+  receive(event: ImAdapterEvent): Promise<boolean>
+}
 
 export interface Chat {
+  platform?: string
+  accountId?: string
+  conversation?: ImConversation
+  actor?: ImActor
+  generation?: number
   chatId: ChatId
   kind: 'private' | 'group' | 'system'
   userId?: string
@@ -188,6 +228,7 @@ export interface Api {
   has(id: string): boolean
   core: {
     hub: any
+    imAdapters: ImAdapterRegistry
     onebot: { call(action: string, params?: any, opts?: any): Promise<any>; state: string }
     snowluma: any
     local: any

@@ -3,12 +3,30 @@
 /** 权限档位：full = DSH 完整工具；social = 只有 QQ 社交工具；chat = 纯聊天，没有工具。 */
 export const LEVELS = ['full', 'social', 'chat']
 
+/** Explicit IM identities never fall back to the legacy QQ owner/allow lists. */
+export function accountFor(cfg, value) {
+  return (cfg.imAccounts || []).find(a => a.enabled === true && a.platform === value?.platform && a.accountId === value?.accountId)
+}
+export function actorIsOwner(cfg, chat, senderId = chat?.actor?.senderId ?? chat?.userId) {
+  if (!chat?.platform) return isOwner(cfg, senderId)
+  const a = accountFor(cfg, chat)
+  return Boolean(a?.ownerId && String(a.ownerId) === String(senderId))
+}
+
 /**
  * @param {object} cfg 插件配置
  * @param {{kind:'private'|'group', userId:string, groupId:string}} msg
  * @returns {{allowed: boolean, reason: string}}
  */
 export function checkAllowed(cfg, msg) {
+  if (msg.platform) {
+    const a = accountFor(cfg, msg)
+    if (!a) return { allowed: false, reason: 'IM account disabled or unbound' }
+    const allowed = msg.kind === 'private'
+      ? actorIsOwner(cfg, msg) || (a.allow?.private || []).includes(msg.userId)
+      : (a.allow?.groups || []).includes(msg.conversation?.id)
+    return { allowed, reason: allowed ? 'IM allow' : 'IM conversation not allowed' }
+  }
   const owner = String(cfg.ownerQQ || '')
   if (msg.kind === 'private') {
     if (msg.userId === owner) return { allowed: true, reason: '主人' }
@@ -25,8 +43,7 @@ export function checkAllowed(cfg, msg) {
 
 /** 这个会话用哪一档权限。群聊永远不超过 social。 */
 export function levelFor(cfg, chat) {
-  const owner = String(cfg.ownerQQ || '')
-  if (chat.kind === 'private' && chat.userId === owner) {
+  if (chat.kind === 'private' && actorIsOwner(cfg, chat)) {
     return LEVELS.includes(cfg.ownerLevel) ? cfg.ownerLevel : 'full'
   }
   return 'social'
@@ -58,7 +75,7 @@ export const permOf = (cfg, key) => {
 export function profileToolVisible(cfg, key, chat) {
   const p = permOf(cfg, key)
   if (p === 'all') return chat.kind === 'private' || chat.kind === 'group'
-  if (p === 'owner') return chat.kind === 'private' && String(chat.userId) === String(cfg.ownerQQ || '')
+  if (p === 'owner') return chat.kind === 'private' && actorIsOwner(cfg, chat)
   return false
 }
 

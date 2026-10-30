@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { dataDir, readJson, writeJson } from '../core/store.js'
 import { searchSongs, songUrl, account } from './netease.js'
 import { readZip } from './zip.js'
+import { targetFromChatId, chatFromKey, deliveryConfirmed } from '../chat/im-context.js'
 
 export const APPLIO_REPO = 'https://github.com/IAHispano/Applio.git'
 export const APPLIO_COMMIT = 'c817f1f83f689ef72e0dfeb1c17ae990b9248506'
@@ -393,7 +394,7 @@ export function explainSongError(message) {
   return m
 }
 
-export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSung, local }) {
+export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSung, local, supportsNativeVoice = chatId => !targetFromChatId(chatId)?.platform, captureDelivery }) {
   const cfg = () => getConfig().song
   const P = () => pathsOf(cfg().root || defaultRoot())
   const work = () => dataDir('songs')
@@ -794,18 +795,24 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
     current = { query: job.query, title: job.query, chatId: job.chatId, stage: '排队', startedAt: Date.now() }
     log.info(`翻唱开始：「${job.query}」→ ${job.chatId}`)
     try {
+      if (!job.delivery.valid() || !cfg().enabled) return
       const r = await process1(job)
       current.stage = '发送'
-      await sendVoiceFile(job.chatId, r.file, `[翻唱] ${job.title || job.query}`)
+      if (!job.delivery.valid() || !cfg().enabled || !supportsNativeVoice(job.chatId)) return
+      const receipt = await job.delivery.run(() => sendVoiceFile(job.chatId, r.file, `[翻唱] ${job.title || job.query}`))
+      if (!job.delivery.valid() || !deliveryConfirmed(receipt, job.delivery.chat)) {
+        history.unshift({ at: Date.now(), title: job.title || job.query, ok: false, status: receipt?.status || 'uncertain', message: '投递尚未确认，不重发' })
+        return
+      }
       history.unshift({ at: Date.now(), title: job.title || job.query, voice: r.voice, pitch: r.pitch, ok: true, message: `用时 ${Math.round((Date.now() - current.startedAt) / 1000)} 秒` })
       log.info(`翻唱完成：「${job.title || job.query}」`)
-      onSung?.(job.title || job.query, job.chatId)
+      onSung?.(job.title || job.query, job.chatId, job.delivery.chat)
       if (!cfg().keepWork) try { rmSync(r.dir, { recursive: true, force: true }) } catch (error) {}
     } catch (error) {
       const why = explainSongError(error.message)
       history.unshift({ at: Date.now(), title: job.title || job.query, ok: false, message: why })
       log.warn(`翻唱失败：「${job.query}」：`, error.message)
-      sendText?.(job.chatId, `唱不了「${job.title || job.query}」：${why}`).catch(() => {})
+      if (job.delivery.valid() && cfg().enabled) Promise.resolve(job.delivery.run(() => sendText?.(job.chatId, `唱不了「${job.title || job.query}」：${why}`))).catch(() => {})
     } finally {
       history = history.slice(0, 20)
       current = null
@@ -817,11 +824,14 @@ export function createSongStudio({ getConfig, log, sendVoiceFile, sendText, onSu
   function request({ song, songId, file, pitch, voice, chatId }) {
     const c = cfg()
     if (!c.enabled) return { ok: false, message: '翻唱还没打开（面板「翻唱」标签里开）' }
+    if (!supportsNativeVoice(chatId)) return { ok: false, code: 'NATIVE_VOICE_GAP', message: '当前平台未公开原生语音发送能力，尚未开始生成' }
+    const delivery = captureDelivery?.(chatId) || { chat: chatFromKey(chatId), valid: () => !targetFromChatId(chatId)?.platform && getConfig().enabled !== false, run: fn => fn() }
+    if (!delivery.valid()) return { ok: false, code: 'STALE_IDENTITY', message: '原会话身份或授权已变化，尚未开始生成' }
     const st = status()
     if (!st.ready) return { ok: false, message: '翻唱环境还没装好：' + st.message }
     if (!song && !songId && !file) return { ok: false, message: '要说唱哪首歌' }
     if (queue.length >= 5) return { ok: false, message: '排队的歌太多了，等会儿再点' }
-    queue.push({ query: song || basename(file || ''), songId, file, pitch, voice, chatId })
+    queue.push({ query: song || basename(file || ''), songId, file, pitch, voice, chatId, delivery })
     const ahead = queue.length - 1 + (current ? 1 : 0)
     pump()
     return { ok: true, message: `开始准备「${song || basename(file || '')}」，大概要两三分钟${ahead ? `（前面还有 ${ahead} 首）` : ''}，做好了会直接发语音` }

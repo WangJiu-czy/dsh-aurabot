@@ -6,7 +6,7 @@
 // 为什么放在 tools/pre-execute 这一层：DSH 在工具真正执行前会走这个 waterfall，
 // 这里返回 deny 就不会执行，能拿到「命令原文」，比只靠提示词可靠。
 
-import { isOwner } from '../chat/access.js'
+import { isOwner, actorIsOwner } from '../chat/access.js'
 
 const CONFIRM_RE = /^(确认|确认执行|同意|同意执行|允许|允许执行|可以|执行吧|放行|yes|y|ok)$/i
 const CANCEL_RE = /^(取消|取消执行|拒绝|不要|不|不行|别|停|停手|拦下|no|n)$/i
@@ -53,7 +53,7 @@ const clip = (text, n = 300) => (text.length > n ? text.slice(0, n) + '…' : te
  * @param {number} [o.timeoutMs] 等确认的超时（默认 60 秒）
  * @param {object} [o.log]
  */
-export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ, timeoutMs = 60_000, log } = {}) {
+export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ, contextOfSession, isCurrent, timeoutMs = 60_000, log } = {}) {
   const pending = new Map() // chatId → { resolve, timer }
 
   function cleanup (chatId, value) {
@@ -61,6 +61,7 @@ export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ,
     if (!p) return false
     pending.delete(chatId)
     clearTimeout(p.timer)
+    clearInterval(p.watch)
     p.resolve(value)
     return true
   }
@@ -80,9 +81,12 @@ export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ,
     const sessionId = exec.agent && exec.agent.session && exec.agent.session.id
     const chatId = chatOfSession ? String(chatOfSession(sessionId) || '') : ''
     const owner = String(ownerQQ ? ownerQQ() : '')
-    const ownerChat = owner ? `private:${owner}` : ''
+    const chat = contextOfSession?.(sessionId)
+    const explicitIm = Boolean(chat?.platform)
+    const valid = () => !explicitIm || (getConfig()?.security?.dangerConfirm === true && getConfig()?.enabled === true && actorIsOwner(getConfig(), chat) && chat.kind === 'private' && isCurrent?.(sessionId) === true)
+    const ownerChat = explicitIm && valid() ? chat.chatId : owner ? `private:${owner}` : ''
     // 只有主人私聊可能有终端工具；别的会话真调到了就直接拦（不打扰主人）
-    if (!chatId || chatId !== ownerChat) {
+    if (!chatId || chatId !== ownerChat || !valid()) {
       log?.warn?.(`危险命令已拦下（非主人私聊 ${chatId || '未知'}）：${clip(command, 120)}`)
       return { kind: 'deny', reason: `这条命令被安全策略拦下了（${danger.label}）：只有主人私聊里、并且经过主人确认才能执行。` }
     }
@@ -101,15 +105,17 @@ export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ,
       const asked = new Promise((resolve) => {
         // 注意别 unref：系统就在等这个确认（工具调用被挂住），计时器必须撑着
         const timer = setTimeout(() => { cleanup(chatId, false); log?.warn?.(`危险命令确认超时，已拦下：${clip(command, 120)}`) }, timeoutMs)
-        pending.set(chatId, { resolve, timer })
+        const watch = explicitIm ? setInterval(() => { if (!valid()) cleanup(chatId, false) }, 100) : null
+        watch?.unref?.()
+        pending.set(chatId, { resolve, timer, watch, chat, valid, senderId: chat?.userId })
       })
-      ;(async () => { try { await deliver(ownerChat, question) } catch (error) { log?.warn?.('危险命令确认消息没发出去：', error.message); cleanup(chatId, false) } })()
+      ;(async () => { try { const receipt = await deliver(ownerChat, question); if (explicitIm && receipt?.status !== 'confirmed') cleanup(chatId, false) } catch (error) { log?.warn?.('危险命令确认消息没发出去：', error.message); cleanup(chatId, false) } })()
       ok = await asked
     } catch (error) {
       log?.warn?.('危险命令确认出错：', error.message)
       ok = false
     }
-    if (ok) {
+    if (ok && valid()) {
       log?.info?.(`主人确认执行危险命令（${danger.label}）：${clip(command, 120)}`)
       return next()
     }
@@ -121,10 +127,15 @@ export function createDangerGuard ({ getConfig, deliver, chatOfSession, ownerQQ,
    * 处理主人 QQ 私聊回复。命中的确认/取消返回 true（这条消息被消费，不再交给她）；
    * 其它消息返回 false，照常走原来的聊天流程。
    */
-  function handleReply (chatId, userId, text) {
+  function handleReply (chatId, userId, text, context) {
     if (!pending.has(String(chatId || ''))) return false
+    const p = pending.get(String(chatId))
+    if (p.chat?.platform) {
+      if (!p.valid()) return cleanup(String(chatId), false)
+      if (!context || context.platform !== p.chat.platform || context.accountId !== p.chat.accountId || context.generation !== p.chat.generation || String(userId) !== p.senderId) return false
+    }
     const owner = String(ownerQQ ? ownerQQ() : '')
-    if (!isOwner({ ownerQQ: owner }, userId)) return false
+    if (!p.chat?.platform && !isOwner({ ownerQQ: owner }, userId)) return false
     const t = String(text || '').trim()
     if (CONFIRM_RE.test(t)) return cleanup(String(chatId), true)
     if (CANCEL_RE.test(t)) return cleanup(String(chatId), false)

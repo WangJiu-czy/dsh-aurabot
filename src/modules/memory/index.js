@@ -3,7 +3,9 @@
 // 别的模块（空间日记、B 站、翻唱）会往这里记她的经历；记忆模块关着时它们自己跳过。
 
 import { createMemoryStore, memoryLine } from '../../features/memory.js'
+import { createMemoryPending } from '../../features/memory-pending.js'
 import { defineTool, str } from '../../tools/tools.js'
+import { checkAllowed } from '../../chat/access.js'
 
 export default {
   id: 'memory',
@@ -11,13 +13,26 @@ export default {
   version: '1.0.0',
   description: '长期记忆：记事、想起、每日整理、小档案和相处经验',
   tab: 'mood',
-  files: ['features/memory.js'],
+  files: ['features/memory.js', 'features/memory-dynamics.js', 'features/memory-pending.js'],
   setup(api) {
     const { hub, http } = api.core
-    const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, log: api.log })
+    const mood = api.lazy('mood')
+    const memory = createMemoryStore({ dsh: api.dsh, getConfig: api.config, hub, log: api.log,
+      moodValue: () => mood.current?.() ?? 60,
+      canEncode: chat => Boolean(chat && api.config().enabled && checkAllowed(api.config(), chat).allowed && (!chat.platform || api.core.imAdapters?.generation(chat) === chat.generation)),
+    })
 
     api.context(({ chat, sessionId }) => (chat.kind === 'system' ? '' : memory.contextFor(chat, sessionId)))
-    api.every(60_000, () => memory.tick(), '整理记忆')
+    const pending = createMemoryPending({ getConfig: api.config, encode: memory.encode, log: api.log })
+    api.on('activity', activity => {
+      if (!api.config().memory.enabled || !api.config().memory.simulation?.enabled) return
+      if (activity.kind === 'in') {
+        const r = pending.observe(activity)
+        if (!r.ok) api.log.warn(`记忆待处理队列：${r.code}`)
+      }
+      if (activity.kind === 'memory-use') for (const echo of memory.confirmUse(activity)) mood.recallEcho?.(echo)
+    })
+    api.every(60_000, async () => { if (api.config().memory.enabled) await pending.tick(); await memory.tick() }, '整理记忆')
 
     api.tool(({ chat }) => {
       if (!api.config().memory.enabled || chat.kind === 'system') return []
@@ -32,7 +47,7 @@ export default {
             importance: { type: 'number', description: '0~1，约定、关系、核心喜好写高一点，随口一提写低一点，不确定写 0.5' },
           },
           required: ['text'],
-          execute: async ({ text, about, importance }) => memory.add({ text, aboutName: about || '', about: chat.kind === 'private' ? chat.userId : '', importance: importance ?? 0.5, source: 'tool', chatId: current }),
+          execute: async ({ text, about, importance }) => memory.add({ text, aboutName: about || '', about: chat.kind === 'private' ? chat.userId : '', importance: importance ?? 0.5, source: 'tool', chatId: current, chat }),
         }),
         defineTool({
           name: 'recall_memory',
@@ -40,17 +55,17 @@ export default {
           properties: { query: str('想找什么') },
           required: ['query'],
           execute: async ({ query }) => {
-            const hits = memory.recall(String(query || ''), { about: chat.userId, limit: 8, where: current + '（翻记忆）' })
+            const hits = memory.recall(String(query || ''), { about: chat.userId, chat, limit: 8, effort: true, where: current + '（翻记忆）' })
             return hits.length ? { ok: true, message: hits.map((h) => memoryLine(h.it)).join('；') } : { ok: true, message: '没想起相关的事' }
           },
         }),
       ]
     })
 
-    api.route('/memories', async (req) => ({ ok: true, items: memory.list(http.query(req).q || '').slice(0, 300), stats: memory.stats() }))
+    api.route('/memories', async (req) => ({ ok: true, items: memory.list(http.query(req).q || '', { allScopes: true }).slice(0, 300), stats: memory.stats() }))
     api.route('/memory/add', async (req) => {
       const b = await http.body(req)
-      return memory.add({ text: b.text, aboutName: b.aboutName || '', about: b.about || '', importance: b.importance ?? 0.6, tags: b.tags || [], source: 'panel' })
+      return memory.add({ text: b.text, aboutName: b.aboutName || '', about: b.about || '', importance: b.importance ?? 0.6, tags: b.tags || [], source: 'panel', scope: b.scope, aboutIdentity: b.aboutIdentity })
     })
     api.route('/memory/update', async (req) => {
       const b = await http.body(req)

@@ -89,6 +89,24 @@ export function createMood({ getConfig, dsh }) {
     state: () => ({ ...load(), value: current(), label: moodLabel(current()) }),
     effects: () => (getConfig().mood.enabled ? moodEffects(current()) : moodEffects(60)),
     nudge,
+    recallEcho({ id, chatId, valence, arousal }) {
+      if (!getConfig().memory?.enabled || !getConfig().memory?.simulation?.enabled || !getConfig().mood.enabled || !id || !chatId || !Number.isFinite(valence) || !Number.isFinite(arousal)) return false
+      const now = Date.now(), s = load(), key = String(chatId)
+      s.recallEchoes = Object.fromEntries(Object.entries(s.recallEchoes || {}).filter(([, e]) => now - e.at < 86400000))
+      const e = s.recallEchoes[key] || { day: '', spent: 0, value: 0, at: now, used: {} }
+      const day = new Date(now).toDateString()
+      if (e.day !== day) { e.day = day; e.spent = 0 }
+      if (e.used[id] && now - e.used[id] < 6 * 3600000) return false
+      const delta = Math.sign(valence) * Math.min(3, Math.abs(valence) * Math.max(0, Math.min(1, arousal)) * 3, 9 - e.spent)
+      if (!delta) return false
+      e.value = decayed(e.value, e.at, 2, now, 0) + delta
+      e.at = now
+      e.spent += Math.abs(delta)
+      e.used = Object.fromEntries(Object.entries({ ...e.used, [id]: now }).filter(([, at]) => now - at < 6 * 3600000).slice(-100))
+      s.recallEchoes[key] = e
+      save(s)
+      return true
+    },
     /**
      * 聊天里的一句话。direct = 是对她说的（私聊、@她、叫她）；owner = 主人说的。
      * 不是对她说的群聊只算三成，主人的话算 1.5 倍。
@@ -126,13 +144,15 @@ export function createMood({ getConfig, dsh }) {
       }
     },
     /** 给每一轮的上下文：心情明显偏离平常时，告诉她现在的状态和该怎么说话。 */
-    contextLine() {
+    contextLine(chat) {
       if (!getConfig().mood.enabled) return ''
       const s = load()
-      const v = current()
+      const echo = getConfig().memory?.enabled && getConfig().memory?.simulation?.enabled && chat?.chatId ? s.recallEchoes?.[chat.chatId] : null
+      const offset = echo ? decayed(echo.value, echo.at, 2, Date.now(), 0) : 0
+      const v = Math.max(5, Math.min(100, current() + offset))
       const label = moodLabel(v)
       const style = MOOD_STYLE[label]
-      if (!style) return ''
+      if (!style) return Math.abs(offset) >= 0.2 ? `（刚才想起的真实往事带来一点${offset > 0 ? '暖意' : '低落'}，只是短暂感受，不改变事实判断，也不要求对方安抚。）` : ''
       return `（你现在${label}${s.reason ? '，因为' + s.reason : ''}。这会自然地影响你说话：${style}。不用说出来自己心情如何。）`
     },
   }

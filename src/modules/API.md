@@ -167,6 +167,7 @@ export default {
 |---|---|
 | `hub` | 聊天中枢：`deliver(chatId, text)` `sendText` `sendVoice(chatId, 文字)` `sendVoiceFile(chatId, 音频文件)` `sendImage` `sendSticker(chatId, 名字)` `sendSegments` `runSystemTurn(名字, 标题, 提示词)` `pushToSession(...)` `resetChat(chatId)` `groupName(群号)` `turnHasOwner(sessionId)` `chatOfSession(sessionId)` `stats()` `sessions()` `chatLogOf(日期)` `lastChatAt` `lastOwnerChatAt` …… |
 | `onebot` | QQ 网关：`call(action, params, { timeoutMs })`、`state` |
+| `imAdapters` | 未来 IM 接入入口：`register({ platform, accountId }, { send })`、`onMessage(identity, handler)`、`send(identityAndConversation, message)`、`receive(identityAndConversationAndMessage)`。按平台和登录账号隔离；不会自动接管 QQ/抖音消息或赋予主人权限，见 `docs/IM-ADAPTERS.md` |
 | `snowluma` | SnowLuma 管理：`running()` `start()` `stop()` `detect()` …… |
 | `local` | 本地接口（「本地接口」页那四项）：`active(slot)` `call(slot, 参数)` |
 | `groupRoles` | 她在各群的身份：`get(群号)` `canManage(role)` `label(role)` |
@@ -309,19 +310,38 @@ return function Panel({ settings, save, toast }) {
 | `stickers` | 表情包 | `library()` `match(名字)` `pickForReply(文字)` `collect(消息段, chatId)` `addFromBuffer(buf, { name, tags })` `rename(md5, 名字, 标签)` `remove(md5)` `segmentFor(item)` |
 | `voice` | 语音 | `speak(文字) → { file, engine }` |
 | `mood` | 心情 | `state()` `label()` `nudge(变化量, 原因)` `effects()` `contextLine()` |
+| `self-evolution` | 自我进化（Persona Sim） | `snapshot(chatId)` `interact(chatId, quality)`；给主人提供 `/ps status`、`/ps todo`、`/ps tick`、`/ps reset` |
 | `memory` | 记忆 | `add({ text, about, aboutName, importance, tags, source })` `addEvent({ text, about, tags, importance })` `recall(查询, { about, limit })` `list(查询)` `remove(id)` `update(id, 改动)` `contextFor(chat, sessionId)` `topicScore(文字)` `profiles()` `consolidate()` …… |
 | `qq-tools` | 基础 QQ 工具 | （只有工具：`qq_chat_history`、`qq_send_message`、`qq_send_file`） |
 | `group-admin` | 群管 | （只有工具：`qq_group_admin`） |
 | `imagegen` | 生图 | `enabled()` `generate(描述) → Buffer` |
 | `diary` | 空间日记 | `writeDiary()` `post(正文, { images, visibility })` `remove(tid)` `history()` `nextTime()` |
+| `virtual-life` | 虚拟人生（Virtual Life 核心移植） | `generate(date, requirement)` `scheduleFor(date)`；工具 `get_virtual_daily_schedule` |
 | `qzone-social` | 空间互动 | `run({ force })` `state()` |
 | `speakup` | 主动搭话 | `fire(原因)` `state()` |
 | `bili` | B 站 | `watch(链接)` `comment(链接, 文字)` `run()` `checkReplies()` `account()` `state()` |
-| `douyin` | 刷抖音 | `run` `browse` `watch` `likeVideo` `commentVideo` `confirmOwner` `account` `loginStep` `showWindow` `state`；工具 `douyin_watch` / `douyin_browse` / `douyin_like` / `douyin_comment` |
+| `astrbot-compat` | meme_manager 原生移植 | `&&分类&&` 标记映射、`compat_*` 联动接口、GitHub 图包导入（30 张 / 25 MB 上限） |
+| `douyin-bridge` | 抖音消息桥 | `state` `login` `continueLogin` `logout` `targets`；消息通过 `imAdapters` 进入共享 hub |
+| `douyin` | 抖音浏览器 | `run` `browse` `watch` `likeVideo` `commentVideo` `confirmOwner` `account` `loginStep` `showWindow` `state`；工具 `douyin_watch` / `douyin_browse` / `douyin_like` / `douyin_comment` |
 | `song` | 翻唱 | `request({ song, pitch, chatId })` `search(关键词)` `status()` `install()` |
+
+`self-evolution` 的 Persona Sim 参考并改写自 [Renyus/astrbot_plugin_self_evolution](https://github.com/Renyus/astrbot_plugin_self_evolution)，上游采用 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)；本移植将状态引擎改为 Aurabot JavaScript 模块，并复用 Aurabot 的心情、记忆和主动搭话能力。状态卡位于「心情与记忆」页，展示主人私聊的状态、效果和待办。
 
 聊天中枢需要的时候会去找 `stickers`（发表情、偷表情）、`voice`（发语音）、`mood`（心情影响表情 / 语音频率）、`memory`（群聊插话判断）。
 这几个被关掉，对应的事就不做（想发语音时改发文字）；被替换，就用你的——所以替换时**导出的函数名要和上表一样**。
+
+## AstrBot meme_manager 联动适配
+
+`api.use('astrbot-compat')` 提供 `context`、`plugin` 和 `event(msg)`，用于把 Aurabot 内的联动模块接到 AstrBot meme_manager 的 `compat_send_message` / `compat_prepare_message` / `compat_send_prepared_message` 公开接口形状：
+
+```js
+const bridge = api.use('astrbot-compat')
+const event = bridge.event(msg) // msg 为 Aurabot 的 message 事件对象
+const star = bridge.context.get_registered_star('meme_manager')
+await star.star_cls.compat_send_message(event, '要发送的文本')
+```
+
+这是已在 Aurabot 内运行的原生模块，不需要另行安装 AstrBot Python Star。它会读取资源包 `manifest.json` 与 `memes/<分类>/` 图片，按分类标签写入 Aurabot 表情库；`&&分类&&` 仅在存在匹配图片时映射为 Aurabot 的 `<sticker:名字>`，找不到分类时保留原标记。主人可在 QQ 输入 `/meme-pack owner/repo [ref] [subpath] [pack-id]` 导入公开 GitHub 图包；`subpath` 填资源包 `manifest.json` 所在目录，不填或写 `.` 表示仓库根目录。命令执行后自动加入 Aurabot 表情库，动态规则会把当前分类列表交给模型。适配接口 `install_pack(source, expectedPackId?)` 同样可供 Aurabot 模块调用。导入限制为最多 30 张、单图 5 MB、总量 25 MB；不写入 QQ 收藏。兼容消息链支持文本段和 OneBot 段。AstrBot 的 WebUI、多包选择规则、语义索引、自动收集与云端同步尚未移植。
 
 ## 替换内置模块
 

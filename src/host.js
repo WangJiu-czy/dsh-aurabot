@@ -24,12 +24,12 @@ import { createGroupRoles } from './chat/group-roles.js'
 import { defaultModel, askModel, modelReasoning, modelVision, clearReasoningCache, clearVisionCache } from './core/llm.js'
 import { mimeOf } from './chat/inbound.js'
 import { dataDir, ensureDir } from './core/store.js'
-import { createUpdateChecker, changelogSection } from './core/update.js'
 import { parseCommand, runCommand, createMutes, commandList } from './chat/commands.js'
 import { listPersonas, readPersona, savePersona, deletePersona, currentPersonaText, rulesText, seedPersonas } from './persona/personas.js'
 import { createModules, API_VERSION } from './core/modules.js'
 import { createBridge } from './core/bridge.js'
 import { createDangerGuard } from './security/danger.js'
+import { createImAdapterRegistry } from './core/im-adapters.js'
 import { BUILTINS } from './modules/index.js'
 
 export const name = 'aurabot'
@@ -231,7 +231,9 @@ export function apply(ctx) {
     },
   }
 
+  const imAdapters = createImAdapterRegistry()
   hub = createHub({
+    imAdapters,
     localApi: local,
     dsh: ctx,
     getConfig,
@@ -243,7 +245,7 @@ export function apply(ctx) {
     contextProviders: [(args) => mods.contextFor(args)],
     onActivity: (a) => mods.emit('activity', a),
     // 群聊话题和她的记忆有多相关（插话判断用）
-    memoryScore: (text) => use('memory')?.topicScore?.(text) ?? 0,
+    memoryScore: (text, chat) => use('memory')?.topicScore?.(text, chat) ?? 0,
     // QQ 里的主人命令（模块加的命令优先）
     onCommand: async (msg) => {
       const cmd = parseCommand(msg.text, mods.commands())
@@ -255,7 +257,7 @@ export function apply(ctx) {
     moodEffects: () => use('mood')?.effects?.() ?? null,
     availableModels: () => modelCache,
     hooks: {
-      message: (msg) => mods.claim('message', msg),
+      message: (msg) => dangerGuard?.handleReply(msg.chatId, msg.userId, msg.text, msg) || mods.claim('message', msg),
       reply: (text, info) => mods.filter('reply', text, info),
       deniedTools: () => bridge?.deniedTools() || [],
       groupDecide: (decision, info) => mods.filter('group/decide', decision, info),
@@ -266,6 +268,8 @@ export function apply(ctx) {
       poke: (ev) => mods.claim('poke', ev),
     },
   })
+
+  ctx.effect(() => () => hub.dispose())
 
   // ---------- 面板接口的小工具 ----------
   const send = (res, code, body, type = 'application/json; charset=utf-8') => {
@@ -320,6 +324,7 @@ export function apply(ctx) {
   // ---------- 模块 ----------
   const core = {
     hub, onebot, snowluma, local, groupRoles, mutes, logger, bridge: null,
+    imAdapters,
     root: ROOT,
     ask: (opts) => askModel(ctx, { cfg: getConfig(), ...opts }),
     listModels,
@@ -340,11 +345,16 @@ export function apply(ctx) {
     deliver: (chatId, text) => hub.sendText(chatId, text),
     chatOfSession: (sessionId) => { try { return hub.chatOfSession?.(sessionId) || '' } catch (error) { return '' } },
     ownerQQ: () => cfg.ownerQQ,
+    contextOfSession: hub.contextOfSession,
+    isCurrent: hub.canExecute,
   })
   core.dangerGuard = dangerGuard
   ctx.effect(() => {
     let off = null
-    try { off = ctx.on('tools/pre-execute', (exec, next) => dangerGuard.preExecute(exec, next)) } catch (error) { log.debug('挂危险命令确认失败：', error.message) }
+    try { off = ctx.on('tools/pre-execute', (exec, next) => {
+      if (!hub.canExecute(exec.agent?.session?.id, exec.name)) return { kind: 'deny', reason: 'IM permission or account changed' }
+      return dangerGuard.preExecute(exec, next)
+    }) } catch (error) { log.debug('挂危险命令确认失败：', error.message) }
     return () => { try { if (typeof off === 'function') off() } catch (error) {} }
   }, 'aurabot: 危险命令确认')
   const booted = mods.boot()
@@ -417,6 +427,7 @@ export function apply(ctx) {
     }
     const diary = use('diary')
     const memory = use('memory')
+    const selfEvolution = use('self-evolution')?.snapshot(`private:${cfg.ownerQQ}`)
     return {
       ok: true,
       version: VERSION,
@@ -427,6 +438,7 @@ export function apply(ctx) {
       stats: hub.stats(),
       // 模块关着时给个空壳，面板照常显示
       mood: use('mood')?.state?.() ?? { value: 0, label: '心情模块关着', reason: '', history: [] },
+      selfEvolution: selfEvolution ? { state: selfEvolution.state, effects: selfEvolution.effects, todos: selfEvolution.todos } : null,
       stickers: { count: stickers.library().items.length },
       diary: diary ? { next: diary.nextTime(), last: diary.history()[0] || null } : { next: 0, last: null },
       qzoneSocial: use('qzone-social')?.state?.() ?? null,
@@ -484,14 +496,6 @@ export function apply(ctx) {
     return r
   })
   route('/commands', async () => ({ ok: true, list: commandList(mods.commands()) }))
-  // 更新：检查 GitHub 上有没有新版本；这次更新了什么
-  const checkUpdate = createUpdateChecker({ pkg: PKG, log })
-  route('/update/check', async (req) => checkUpdate({ force: query(req).force === '1' }))
-  route('/changelog', async () => {
-    let text = ''
-    try { text = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8') } catch (error) {}
-    return { ok: true, version: VERSION, notes: changelogSection(text, VERSION) }
-  })
   route('/snowluma/login-check', async () => ({ ...(await snowluma.canLogin()), passwordAuto: cfg.snowluma.passwordAuto, running: await snowluma.running() }))
   route('/snowluma/agreements', async () => {
     try { return { ok: true, ...(await snowluma.agreements()) } } catch (error) { return { ok: false, message: error.message } }
@@ -787,10 +791,11 @@ export function apply(ctx) {
   log.info(`Aurabot v${VERSION} 已加载｜总开关 ${cfg.enabled ? '开' : '关'}｜试运行 ${cfg.dryRun ? '开' : '关'}｜工作区 ${workspaceDirOf(cfg)}`)
 
   return {
-    hub, onebot, snowluma, getConfig, setConfig, logger, modules: mods, bridge, ready: booted,
+    hub, onebot, snowluma, imAdapters, getConfig, setConfig, logger, modules: mods, bridge, ready: booted,
     get stickers() { return use('stickers') },
     get qzone() { return use('diary') },
     get mood() { return use('mood') },
     get memory() { return use('memory') },
+    get astrbotCompat() { return use('astrbot-compat') },
   }
 }

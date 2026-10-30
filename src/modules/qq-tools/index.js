@@ -2,6 +2,7 @@
 
 import { defineTool, str, int } from '../../tools/tools.js'
 import { parseMessageEvent } from '../../chat/inbound.js'
+import { deliveryConfirmed } from '../../chat/im-context.js'
 
 export default {
   id: 'qq-tools',
@@ -54,7 +55,7 @@ export default {
             chatId = `${kind}:${id}`
           }
           const r = await hub.sendFile(chatId, String(file || ''), name ? String(name) : '')
-          if (!r) return { ok: false, message: !cfg.enabled ? '总开关关着，没发' : cfg.dryRun ? '试运行，只记了日志，没真发' : '没发出去' }
+          if (!deliveryConfirmed(r, t ? undefined : chat)) return { ok: false, sent: false, status: r?.status || 'failed', code: r?.code, message: !cfg.enabled ? '总开关关着，没发' : cfg.dryRun ? '试运行，只记了日志，没真发' : '投递尚未确认，不自动重发' }
           const label = String(name || '').trim() || String(file || '').split(/[\\/]/).pop()
           return { ok: true, message: `文件发出去了：${label}` }
         },

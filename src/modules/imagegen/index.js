@@ -6,6 +6,7 @@ import { listPaintings, openPaintFolder, paintingPath, rememberPainting, removeP
 import { defineTool, str } from '../../tools/tools.js'
 import { dataDir } from '../../core/store.js'
 import { mimeOf } from '../../chat/inbound.js'
+import { deliveryConfirmed, memoryScopeFor } from '../../chat/im-context.js'
 
 export default {
   id: 'imagegen',
@@ -49,10 +50,10 @@ export default {
         const startedAt = Date.now()
         const buf = await gen.generate(String(prompt || ''))
         const sent = await hub.sendSegments(chat.chatId, [{ type: 'image', data: { file: 'base64://' + buf.toString('base64') } }], `[生图] ${String(prompt).slice(0, 30)}`)
-        if (!sent) return { ok: false, message: '画好了，但没有发到 QQ（请检查试运行和网关）' }
+        if (!deliveryConfirmed(sent, chat)) return { ok: false, sent: false, status: sent?.status || 'failed', code: sent?.code, message: '画好了，但投递尚未确认；不自动重发' }
         const saved = savePainting(buf, String(prompt || ''))
         if (saved) api.log.debug(`生图已存盘：${saved}`)
-        try { memory.addEvent?.({ text: `按提示词画了一张图（不一定等于实际画面）：${String(prompt).slice(0, 120)}`, about: chat.kind === 'private' ? chat.userId : '', tags: ['画画'], importance: 0.4 }) }
+        try { memory.addEvent?.({ text: `按提示词画了一张图（不一定等于实际画面）：${String(prompt).slice(0, 120)}`, about: chat.kind === 'private' ? chat.userId : '', tags: ['画画'], importance: 0.4, chat, scope: memoryScopeFor(chat) }) }
         catch (error) { api.log.warn('生图已发送，但经历没记下来：', error.message) }
         let visual = (await hub.canSeeImages(chat)) === true
         // 「让她画完自己看一眼」是总开关：关掉就当没视觉能力处理 —— 不给图、也不给路径。

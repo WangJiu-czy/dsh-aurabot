@@ -211,13 +211,6 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-deep:#9cc4f5;--ab-sea:#6
 .ab-avatar-btn{position:relative;padding:0;border:0;background:none;cursor:pointer;border-radius:50%;flex:none}
 .ab-avatar-btn .ab-avatar-tip{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(15,40,80,.45);color:#fff;font-size:12px;opacity:0;transition:opacity .15s}
 .ab-avatar-btn:hover .ab-avatar-tip,.ab-avatar-btn:focus-visible .ab-avatar-tip{opacity:1}
-.ab-wiz-bar{display:flex;gap:6px;margin-top:12px}
-.ab-wiz-bar .seg{flex:1;border:0;background:transparent;padding:0;cursor:default;text-align:left;font:inherit;color:var(--ab-dim)}
-.ab-wiz-bar .seg:before{content:"";display:block;height:4px;border-radius:999px;background:var(--ab-line-2);margin-bottom:6px}
-.ab-wiz-bar .seg.done{cursor:pointer;color:var(--ab-sub)}.ab-wiz-bar .seg.done:before{background:var(--ab-sky)}
-.ab-wiz-bar .seg.on{color:var(--ab-deep);font-weight:600}.ab-wiz-bar .seg.on:before{background:var(--ab-sea)}
-.ab-wiz-bar .seg span{font-size:11.5px}
-@media (max-width:640px){.ab-wiz-bar .seg span{display:none}}
 .ab-range{display:flex;align-items:center;gap:10px;min-width:240px}
 .ab-range input[type=range]{flex:1;accent-color:var(--ab-sea)}
 .ab-range .val{min-width:48px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ab-deep);font-weight:600}
@@ -463,7 +456,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
       { id: 'logs', label: '日志' },
     ]
     // 内置标签页属于哪个模块：模块都没在跑就不显示这一页
-    const TAB_MODS = { voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup'], mood: ['mood', 'memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'] }
+    const TAB_MODS = { voice: ['voice'], stickers: ['stickers'], imagegen: ['imagegen'], diary: ['diary', 'qzone-social'], speakup: ['speakup'], mood: ['mood', 'memory', 'self-evolution', 'angel-memory'], song: ['song'], bili: ['bili'], douyin: ['douyin'] }
     const modOn = (st, id) => (st.modules || []).some((m) => m.id === id && m.running)
     function ModOff({ name }) {
       return h(Card, { title: name }, h('div', { className: 'ab-muted ab-small' }, '「' + name + '」模块关着，这部分用不了。要用的话去「扩展」页把它打开。'))
@@ -485,37 +478,12 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
     }
     const copy = (text, toast, msg) => { try { navigator.clipboard.writeText(text); if (msg) toast(msg, 'ok') } catch (e) { toast('复制失败，手动选中复制吧', 'err') } }
 
-    /** 更新提示：GitHub 上有新版本时给更新命令；刚更新完显示一次这次更新了什么。 */
-    function UpdateNotes({ st, toast }) {
-      const [upd, setUpd] = useState(null)
-      const [notes, setNotes] = useState(null)
-      useEffect(() => {
-        get('/update/check').then(setUpd).catch(() => {})
-        let seen = null
-        try { seen = localStorage.getItem('aurabot.seenVersion') } catch (e) {}
-        if (seen && seen !== st.version) get('/changelog').then((r) => r.notes && setNotes(r.notes))
-        // 第一次打开（新安装）不弹更新说明，直接记下当前版本
-        else if (!seen) { try { localStorage.setItem('aurabot.seenVersion', st.version) } catch (e) {} }
-      }, [st.version])
-      const dismiss = () => { try { localStorage.setItem('aurabot.seenVersion', st.version) } catch (e) {} setNotes(null) }
-      return h(Fragment, null,
-        notes ? h('div', { className: 'ab-note' },
-          h('div', { className: 'ab-flex' }, h('b', null, '已更新到 v' + st.version), h('div', { className: 'ab-spacer' }), h(Btn, { small: true, kind: 'ghost', onClick: dismiss }, '知道了')),
-          h('div', { style: { whiteSpace: 'pre-wrap', marginTop: 6 } }, notes)) : null,
-        upd && upd.newer ? h('div', { className: 'ab-note warn' },
-          h('div', null, h('b', null, '有新版本 v' + upd.latest), '（现在是 v' + upd.current + '）。在 PowerShell 里运行下面这行，然后重启 DSH；设置、人格、记忆都会保留。'),
-          h('div', { className: 'ab-flex', style: { marginTop: 6 } },
-            h('code', { style: { flex: '1 1 300px', fontSize: 11.5, wordBreak: 'break-all' } }, upd.command),
-            h(Btn, { small: true, onClick: () => { try { navigator.clipboard.writeText(upd.command); toast('复制好了', 'ok') } catch (e) { toast('复制失败，手动选中复制吧', 'err') } } }, '复制'))) : null)
-    }
-
     function Overview({ st, toast, go }) {
       const cfg = st.config
       const s = st.stats || {}
       const conn = st.onebot.state === 'connected'
       const quick = (p, body) => async () => { const r = await post(p, body); toast(r.message || (r.ok ? '好了' : '没成功')) }
       return h('div', { className: 'ab-grid' },
-        h(UpdateNotes, { st, toast }),
         !cfg.enabled ? h('div', { className: 'ab-note warn' }, '总开关是关着的：大肥鱼现在不会收也不会发任何 QQ 消息。准备好了就在右上角打开。') : null,
         cfg.enabled && cfg.dryRun ? h('div', { className: 'ab-note' }, '现在是试运行：她会照常思考回复，但只写进日志，不会真的发到 QQ。确认没问题后在右上角关掉「试运行」。') : null,
         cfg.enabled && !conn ? h('div', { className: 'ab-note err' }, '还没连上 QQ 网关' + (st.onebot.problem ? '：' + st.onebot.problem + '。' : '。去「连接」标签看看 SnowLuma 有没有装好、启动没有。') + ' ', h('a', { href: '#', onClick: (e) => { e.preventDefault(); go('connect') } }, '去连接 →')) : null,
@@ -633,7 +601,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         h(Row, { label: 'HTTP 令牌' }, f.text('snowluma.httpToken', { type: 'password', placeholder: draft.snowluma.httpTokenSet ? '已保存' : '没有就留空' })))
     }
 
-    function Connect({ st, draft, setDraft, toast, reload, openWizard }) {
+    function Connect({ st, draft, setDraft, toast, reload }) {
       const f = useField(draft, setDraft)
       const sl = st.snowluma
       const [procs, setProcs] = useState(null)
@@ -646,7 +614,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         h(Btn, { small: true, onClick: async () => { const r = await get('/onebot/test'); toast(r.message) } }, '测试连接'),
         h(Btn, { small: true, onClick: async () => { const r = await post('/onebot/reconnect'); toast(r.message, r.ok ? 'ok' : 'err'); reload() } }, '重新连接'))
       return h('div', { className: 'ab-grid' },
-        h(Card, { title: '用什么接 QQ', right: openWizard ? h(Btn, { small: true, kind: 'ghost', onClick: openWizard }, '重新走一遍设置向导') : null }, h(GatewayChoice, { draft, setDraft })),
+        h(Card, { title: '用什么接 QQ' }, h(GatewayChoice, { draft, setDraft })),
         external ? h(Card, { title: '接上 QQ（已有的 OneBot 机器人）', desc: '让你的 OneBot 服务登录机器人号 ' + (draft.botQQ || '') + '，把它的正向 WebSocket 地址填在这里，保存后插件就会去连。插件只连接，不会启动或注入任何东西；连上后会先核对登录的是不是机器人号，不是就断开。' },
           h(OneBotFields, { draft, f }),
           h(Row, { label: '机器人 QQ 号' }, f.text('botQQ')),
@@ -770,7 +738,7 @@ body[data-ds-dark-theme] .ab-root,.ab-root.ab-dark{--ab-shadow:0 1px 2px rgba(0,
         edit ? h(Card, { title: '编辑人格', desc: '人格写在系统提示词的最前面。保存后，大肥鱼下一轮回复起就按新的来。',
           right: h('div', { className: 'ab-flex' },
             edit.id !== current ? h(Btn, { small: true, onClick: async () => { const r = await post('/persona/use', { id: edit.id }); toast(r.message); refresh(); reload() } }, '设为当前') : null,
-            edit.id !== current ? h(Btn, { small: true, kind: 'danger', onClick: async () => { if (!confirm('删掉这个人格？')) return; const r = await post('/persona/delete', { id: edit.id }); if (r.ok) { setList(r.list); setSel(current) } else toast(r.message) } }, '删除') : null) },
+            edit.id !== current ? h(Btn, { small: true, kind: 'danger', onClick: async () => { if (!confirm('删掉这个人格？')) return; const id = edit.id; const r = await post('/persona/delete', { id }); if (r.ok) { setList(r.list.filter((p) => p.id !== id)); setEdit(null); setDirty(false); setSel(current); await load(current); toast('人格已删除') } else toast(r.message || '删除失败') } }, '删除') : null) },
           h(Row, { label: '名字' }, h('input', { className: 'ab-input', value: edit.name, onChange: upd('name') })),
           h(Row, { label: '标签', hint: '用逗号隔开' }, h('input', { className: 'ab-input', value: edit.tags, onChange: upd('tags') })),
           h('div', { style: { marginTop: 8 } }, h('textarea', { className: 'ab-textarea', style: { minHeight: 380 }, value: edit.body, onChange: upd('body') })),
@@ -1252,7 +1220,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
 
     const SOURCE = { tool: '她自己记的', auto: '每日整理', diary: '空间日记', panel: '你加的', event: '她的经历', import: '导入的' }
 
-    function Mood({ st, draft, setDraft, toast }) {
+    function Mood({ st, draft, setDraft, toast, reload }) {
       const f = useField(draft, setDraft)
       const [mem, setMem] = useState(null)
       const [stats, setStats] = useState(null)
@@ -1278,9 +1246,29 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('div', { className: 'meta' }, timeAgo(x.at)),
             h('div', { className: 'body' }, (x.to >= x.from ? '↑ ' : '↓ ') + x.from + ' → ' + x.to, h('span', { className: 'ab-muted ab-small' }, '  ' + x.reason))))) : null,
         )
-      if (!memOn) return h('div', { className: 'ab-grid' }, moodCard, h(ModOff, { name: '记忆' }))
+      const simOn = modOn(st, 'self-evolution')
+      const sim = st.selfEvolution
+      const knowledgeCard = h(AngelKnowledgeCard, { enabled: modOn(st, 'angel-memory'), toast, defaultScope: draft.ownerQQ ? 'private:' + draft.ownerQQ : 'shared' })
+      const simCard = !simOn ? h(ModOff, { name: '自我进化' }) : h(Card, {
+        title: 'Persona Sim 近况',
+        desc: '显示主人私聊会话的状态推演；互动和时间会影响活力、心情、社交需求与饱腹感。',
+        right: h(Btn, { small: true, onClick: () => reload?.() }, '刷新'),
+      }, sim?.state ? h('div', null,
+        ...[['活力', sim.state.energy], ['心情', sim.state.mood], ['社交需求', sim.state.socialNeed], ['饱腹感', sim.state.satiety]].map(([label, value]) => {
+          const amount = Math.round(value)
+          return h('div', { key: label, style: { marginBottom: 8 } },
+            h('div', { className: 'ab-flex', style: { marginBottom: 4 } }, h('span', null, label), h('span', { className: 'ab-muted' }, amount + ' / 100')),
+            h('div', { className: 'ab-mood' }, h('i', { style: { width: Math.max(4, amount) + '%' } })))
+        }),
+        h('div', { className: 'ab-kv', style: { marginTop: 12 } },
+          h('span', null, '当前效果'), h('span', null, sim.effects?.map((e) => e.name).join('、') || '平稳'),
+          h('span', null, '脑内待办'), h('span', null, sim.todos?.map((t) => t.title).join('；') || '暂时没有')),
+      ) : h(Empty, { icon: '⏳', text: '正在读取 Persona Sim 状态…' }))
+      if (!memOn) return h('div', { className: 'ab-grid' }, moodCard, simCard, knowledgeCard, h(ModOff, { name: '记忆' }))
       return h('div', { className: 'ab-grid' },
         moodCard,
+        simCard,
+        knowledgeCard,
         h(ProfilesCard, { toast }),
         h(Card, { title: '相处经验', desc: '她对每个人（和每个群）总结出来的相处之道：概括的、不琐碎的，比如「他累的时候不想多聊」。每次整理记忆时她会回顾一次，越来越懂你。聊天时只带上对当前这个人的那份。' },
           ins === null ? h(Empty, { icon: '⏳', text: '加载中…' }) : ins.length === 0 ? h(Empty, { icon: '🌱', text: '还没有总结出经验。多聊几天，整理记忆时她会慢慢总结。' }) :
@@ -1299,7 +1287,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('span', { className: 'ab-muted' }, '和'),
             h('input', { className: 'ab-input sm', type: 'time', value: times[1] || '16:00', onChange: (e) => setTime(1, e.target.value) }),
             h(Btn, { small: true, onClick: async () => { toast('正在整理，可能要一两分钟…'); const r = await post('/memory/extract', {}); toast(r.message); load(); loadIns() } }, '现在整理一次')),
-          h(Row, { label: '每轮最多想起几条' }, f.range('memory.recallCount', 0, 12, 1, (v) => v + ' 条')),
+          h(Row, { label: '仿真记忆（实验）', hint: '默认关闭。开启后选择性留下经历，细节先淡、核心后淡；实际用到的回忆才有限强化，并可带来轻微情绪回响。不会改人格。' }, f.sw('memory.simulation.enabled')),
+          draft.memory.simulation?.enabled ? h(Row, { label: '仿真召回预算', hint: '当前配置默认私聊最多 3 条、群聊 1 条、总计 1200 字。旧记录缺少核心摘要时，细节淡化后可能暂时想不起。' }, h('span', { className: 'ab-muted' }, '参数与回滚说明见仿真记忆文档')) : h(Row, { label: '每轮最多想起几条' }, f.range('memory.recallCount', 0, 12, 1, (v) => v + ' 条')),
           h('div', { className: 'ab-section-title' }, '手动加一条'),
           h('div', { className: 'ab-flex' },
             h('input', { className: 'ab-input', style: { flex: '2 1 260px' }, placeholder: '要她记住的事，例如：主人不吃香菜', value: adding.text, onChange: (e) => setAdding({ ...adding, text: e.target.value }) }),
@@ -1313,6 +1302,72 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
         h(RecallLog, null),
         h(MemoryImport, { toast, onDone: () => load() }),
       )
+    }
+
+    function AngelKnowledgeCard({ enabled, toast, defaultScope }) {
+      const [items, setItems] = useState(null)
+      const [count, setCount] = useState(0)
+      const [q, setQ] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [draft, setDraft] = useState({ title: '', domain: '通用', scope: defaultScope || 'shared', content: '' })
+      const load = async (query = q) => {
+        try { const r = await get('/angel-memory/knowledge?q=' + encodeURIComponent(query)); setItems(r.items || []); setCount(r.stats?.count || 0) }
+        catch (error) { setItems([]); setCount(0) }
+      }
+      useEffect(() => {
+        if (!enabled) return
+        const timer = setTimeout(() => load(q), q ? 250 : 0)
+        return () => clearTimeout(timer)
+      }, [enabled, q])
+      if (!enabled) return h(ModOff, { name: '天使之魂' })
+      const set = (key, value) => setDraft((prev) => ({ ...prev, [key]: value }))
+      const importFile = () => {
+        const input = document.createElement('input')
+        input.type = 'file'; input.accept = '.md,.markdown,.txt'
+        input.onchange = () => {
+          const file = input.files?.[0]
+          if (!file) return
+          if (file.size > 128 * 1024) { toast('单条资料文件最多 128 KB', 'err'); return }
+          const reader = new FileReader()
+          reader.onload = () => {
+            const content = String(reader.result || '')
+            if (content.length > 12000) { toast('单条资料最多 12000 字，请先拆分文件', 'err'); return }
+            setDraft((prev) => ({ ...prev, title: file.name.replace(/\.[^.]+$/, ''), content }))
+          }
+          reader.readAsText(file)
+        }
+        input.click()
+      }
+      const save = async () => {
+        setBusy(true)
+        try {
+          const r = await post('/angel-memory/knowledge/add', draft)
+          if (!r.ok) { toast(r.code === 'INVALID_SCOPE' ? '范围请填 shared、group:群号 或 private:QQ号' : r.code === 'CONTENT_TOO_LARGE' ? '单条资料最多 12000 字' : '保存失败：' + (r.code || '未知错误'), 'err'); return }
+          toast('资料已保存', 'ok')
+          setDraft((prev) => ({ ...prev, title: '', content: '' }))
+          await load(q)
+        } catch (error) { toast('保存失败', 'err') }
+        finally { setBusy(false) }
+      }
+      const remove = async (id) => {
+        try { const r = await post('/angel-memory/knowledge/delete', { id }); toast(r.ok ? '资料已删除' : '删除失败', r.ok ? 'ok' : 'err'); if (r.ok) await load(q) }
+        catch (error) { toast('删除失败', 'err') }
+      }
+      return h(Card, { title: '天使之魂 · 本地知识库', desc: '导入或粘贴 Markdown / TXT 资料。默认仅手动检索，不自动塞进聊天；shared 对所有聊天可见，group:群号 / private:QQ号 只对对应聊天可见。', right: h('span', { className: 'ab-muted ab-small' }, count + ' 条') },
+        h('input', { className: 'ab-input wide', placeholder: '搜索本地资料…', value: q, onChange: (e) => setQ(e.target.value) }),
+        h('div', { className: 'ab-grid ab-g2', style: { marginTop: 10 } },
+          h('input', { className: 'ab-input', placeholder: '标题', value: draft.title, onChange: (e) => set('title', e.target.value) }),
+          h('input', { className: 'ab-input', placeholder: '分类（默认通用）', value: draft.domain, onChange: (e) => set('domain', e.target.value) }),
+          h('input', { className: 'ab-input', placeholder: '范围：shared / group:群号 / private:QQ号', value: draft.scope, onChange: (e) => set('scope', e.target.value) }),
+          h('textarea', { className: 'ab-input wide', rows: 5, maxLength: 12000, placeholder: '资料正文（最多 12000 字）', value: draft.content, onChange: (e) => set('content', e.target.value) })),
+        h('div', { className: 'ab-flex', style: { marginTop: 8 } },
+          h(Btn, { small: true, kind: 'ghost', onClick: importFile }, '导入 md/txt'),
+          h(Btn, { small: true, kind: 'primary', disabled: busy || !draft.title.trim() || !draft.content.trim(), onClick: save }, busy ? '保存中…' : '保存资料')),
+        items === null ? h(Empty, { icon: '⏳', text: '正在读取知识库…' }) : items.length === 0 ? h(Empty, { icon: '🫧', text: q ? '没有匹配的资料' : '知识库还是空的；可导入 Markdown/TXT 或直接粘贴。' }) :
+          h('div', { className: 'ab-list', style: { marginTop: 10 } }, items.slice(0, 50).map((item) => h('div', { key: item.id, className: 'ab-li' },
+            h('div', { className: 'meta' }, item.domain, h('br'), h('span', { className: 'ab-small' }, item.scope)),
+            h('div', { className: 'body' }, h('b', null, item.title), h('div', { className: 'ab-muted ab-small' }, item.content)),
+            h(Btn, { small: true, kind: 'ghost', onClick: () => remove(item.id) }, '删除')))))
     }
 
     /** 人物小档案：她对每个人的一小段印象，聊天时常驻；整理记忆时按新记忆重写，也可以手改。 */
@@ -1348,7 +1403,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('div', { className: 'meta' }, timeAgo(r.at), h('br'), h('span', { className: 'ab-small' }, String(r.where || '').replace(/^private:/, '私聊 ').replace(/^group:/, '群 '))),
             h('div', { className: 'body' },
               h('div', { className: 'ab-muted ab-small' }, '「' + r.query.slice(0, 60) + (r.query.length > 60 ? '…' : '') + '」'),
-              r.hits.length ? r.hits.map((x) => h('div', { key: x.id, style: { marginTop: 3 } }, '· ' + x.text, h('span', { className: 'ab-muted ab-small' }, '  ← ' + (x.why.join('、') || '—') + ' · ' + x.score))) : h('div', { className: 'ab-muted', style: { marginTop: 3 } }, '这次什么都没想起来'))))))
+              r.hits.length ? r.hits.map((x) => h('div', { key: x.id, style: { marginTop: 3 } }, '· ' + x.text, h('span', { className: 'ab-muted ab-small' }, '  ← ' + ((Array.isArray(x.why) ? x.why : []).join('、') || '—') + ' · ' + x.score))) : h('div', { className: 'ab-muted', style: { marginTop: 3 } }, '这次什么都没想起来'))))))
     }
 
     /** 导入旧档案：粘贴或上传文字，模型挑出值得记的，勾选后存进记忆库。 */
@@ -1982,9 +2037,8 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h(Btn, { small: true, kind: 'primary', onClick: act('/douyin/confirm-owner', 'confirm', { input: ((draft.douyin || {}).owner || {}).input || '' }), disabled: !!busy }, busy === 'confirm' ? '核对中…' : '核对'),
             s && s.owner ? h('span', { className: 'ab-small', style: { color: 'var(--ab-ok)' } }, '已核对：' + s.owner.nickname) : h('span', { className: 'ab-small ab-muted' }, '还没核对（不核对就不会 @你）')),
         ),
-        h(Card, { title: '抖音私信', desc: '你在抖音上私信她，她会用自己的口气回（只认上面核对过的你，别人的私信不理）。让她找视频的话，她会尝试刷一轮再私信分享给你；这条流程仍需实际环境验证。只在「主动搭话」里设的醒着时间内回。' },
-          h(Row, { label: '回你的抖音私信' }, f.sw('douyin.ownerDm')),
-          h(Row, { label: '多久看一次' }, f.num('douyin.dmPollMinutes', { min: 1, max: 60 }), h('span', { className: 'ab-muted' }, '分钟'), h(Btn, { small: true, onClick: act('/douyin/dms', 'dms'), disabled: !!busy }, busy === 'dms' ? '正在看…' : '现在看一次')),
+        h(Card, { title: '抖音消息桥', desc: '私信和群聊由独立的 douyin-bridge 模块接入共享聊天中枢；它与下面的 ego-lite 浏览器登录分开。账号和会话权限来自 imAccounts 配置。' },
+          h(Row, { label: 'SDK 状态' }, h('span', { className: 'ab-small ab-muted' }, (s && s.im && s.im.status) || 'bridge-disabled')),
         ),
         h(Card, { title: '怎么刷', desc: '只在「主动搭话」里设的醒着时间内自己刷。主人在 QQ 里让她「去刷会儿抖音」也行。' },
           h(Row, { label: '定时自己去刷' }, f.sw('douyin.autoBrowse')),
@@ -2156,113 +2210,14 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
           h('div', { className: 'ab-logs' }, items.slice().reverse().map((e, i) => h(LogLine, { key: i, e }))))
     }
 
-    // ---------------- 首次使用向导 ----------------
-    const WIZ_STEPS = ['你们的 QQ 号', '接 QQ 网关', '启动并同意协议', '连上机器人号', '完成']
-
-    function Wizard({ st, draft, setDraft, save, toast, reload, onClose }) {
-      const [step, setStep] = useState(() => { try { return Number(localStorage.getItem('aurabot.wiz') || 0) } catch (e) { return 0 } })
-      const go = (i) => { setStep(i); try { localStorage.setItem('aurabot.wiz', String(i)) } catch (e) {} }
-      const f = useField(draft, setDraft)
-      const sl = st.snowluma
-      const conn = st.onebot.state === 'connected'
-      const login = st.onebot.login
-      const [procs, setProcs] = useState(null)
-      const [live, setLive] = useState('dry')
-      const qqOk = /^\d{5,11}$/.test(draft.botQQ || '') && /^\d{5,11}$/.test(draft.ownerQQ || '') && draft.botQQ !== draft.ownerQQ
-      const external = draft.gateway === 'onebot'
-      const verified = conn && login && String(login.uin) === String(st.config.botQQ) && !st.onebot.problem
-      const canNext = [qqOk, external ? Boolean(draft.snowluma.wsUrl || st.config.snowluma.wsUrl) : sl.installed, external || (sl.running && sl.consented), verified, true][step]
-      const next = async () => {
-        if ((step === 0 || step === 1) && !(await save({ ...draft, enabled: true }))) return
-        go(Math.min(step + 1, WIZ_STEPS.length - 1))
-        reload()
-      }
-      const useExisting = async () => {
-        const r = await post('/setup/done', { existingConnection: true })
-        toast(r.message, r.ok ? 'ok' : 'err')
-        if (r.ok) { try { localStorage.removeItem('aurabot.wiz') } catch (e) {} reload(); onClose && onClose() }
-      }
-      const body = [
-        // 0. QQ 号
-        h('div', null,
-          h('p', { className: 'ab-desc' }, '大肥鱼需要一个自己的 QQ 号（机器人号），还要知道谁是她的主人。'),
-          h(Row, { label: '机器人 QQ 号', hint: '强烈建议用小号：非官方 QQ 工具有被限制的风险' }, f.text('botQQ', { placeholder: '例如 123456789' })),
-          h(Row, { label: '你的 QQ 号（主人）', hint: '群管、操作电脑这些只听主人的' }, f.text('ownerQQ', { placeholder: '你的大号' })),
-          h(Row, { label: '她怎么称呼你' }, f.text('ownerName', { placeholder: '主人' })),
-          draft.botQQ && draft.ownerQQ && draft.botQQ === draft.ownerQQ ? h('div', { className: 'ab-note err' }, '机器人号和主人号不能是同一个。') : null),
-        // 1. SnowLuma，或接已有的 OneBot 机器人
-        external ? h('div', null,
-          h(GatewayChoice, { draft, setDraft }),
-          h('p', { className: 'ab-desc', style: { marginTop: 10 } }, '让你的 OneBot 服务（NapCat、LLOneBot、Lagrange、Docker 里的 SnowLuma……）登录机器人号，把它的正向 WebSocket 地址填在下面。插件只连接，不会启动或注入任何东西。'),
-          h(OneBotFields, { draft, f })) :
-        h('div', null,
-          h(GatewayChoice, { draft, setDraft }),
-          h('p', { className: 'ab-desc', style: { marginTop: 10 } }, 'SnowLuma 是让机器人号上线的 QQ 网关。它的协议不允许别的程序自动下载安装，所以这一步要你自己来（只用做一次）。'),
-          h('div', { className: 'ab-steps' },
-            h('div', { className: 'ab-step' }, h('div', null, h('b', null, '下载'), h('div', { className: 'ab-muted ab-small' }, '下载 Windows 完整版，文件名类似 SnowLuma-v2.x.x-win-x64.zip（不带 lite）。'),
-              h('div', { style: { marginTop: 6 } }, h(Btn, { small: true, onClick: () => window.open(sl.downloadPage, '_blank') }, '打开下载页 ↗')))),
-            h('div', { className: cx('ab-step', sl.installed && 'done') }, h('div', null, h('b', null, '解压到纯英文目录'), h('div', { className: 'ab-muted ab-small' }, '推荐 C:\\Aurabot\\snowluma，解压后目录里能直接看到 index.mjs。'),
-              h('div', { className: 'ab-flex', style: { marginTop: 6 } }, f.text('snowluma.dir', { size: 'wide', placeholder: 'C:\\Aurabot\\snowluma' }), h(Btn, { small: true, onClick: async () => { await save(draft); reload() } }, '检查')),
-              h('div', { className: 'ab-small', style: { marginTop: 4, color: sl.installed ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, sl.installed ? '✓ 找到了 SnowLuma v' + sl.version : sl.reason))))),
-        // 2. 启动 + 协议（接自己的 OneBot 时不用）
-        external ? h('div', null, h('p', { className: 'ab-desc' }, '用的是你自己的 OneBot 服务，这一步不用做，直接下一步。')) :
-        h('div', null,
-          h('p', { className: 'ab-desc' }, '点启动后它在后台运行（不弹窗口），控制台密码由插件自动生成和保存，你不用记。'),
-          h('div', { className: 'ab-flex', style: { marginBottom: 10 } },
-            h(Btn, { kind: 'primary', small: true, disabled: sl.running, onClick: async () => { toast('正在启动…'); const r = await post('/snowluma/start'); toast(r.message); reload() } }, sl.running ? '✓ 已在运行' : '启动 SnowLuma'),
-            h(SnowLumaAuth, { running: sl.running, toast, onChange: reload })),
-          h(Agreement, { running: sl.running, toast, onChange: reload })),
-        // 3. 接入
-        h('div', null,
-          external ? h('p', { className: 'ab-desc' }, '确认你的 OneBot 服务登录的是机器人号 ' + (st.config.botQQ || '') + '，然后点「测试连接」。插件连上后会先核对登录的号，不是机器人号就断开。') :
-          h('p', { className: 'ab-desc' }, '在这台电脑上另开一个 QQ，登录机器人号 ' + (st.config.botQQ || '') + '（可以最小化）。你的大号 QQ 照常开着就行——插件只会接入机器人号，绝不碰别的号。'),
-          external ? h('div', { className: 'ab-flex' },
-            h(Btn, { kind: 'primary', small: true, onClick: async () => { const r = await post('/onebot/reconnect'); toast(r.message, r.ok ? 'ok' : 'err'); reload() } }, '连接'),
-            h(Btn, { small: true, onClick: async () => { const r = await get('/onebot/test'); toast(r.message) } }, '测试连接')) :
-          h('div', { className: 'ab-flex' },
-            h(Btn, { kind: 'primary', small: true, onClick: async () => { const r = await post('/snowluma/attach'); toast(r.message); setTimeout(reload, 1500) } }, '接入机器人号'),
-            h(Btn, { small: true, onClick: async () => { const r = await get('/snowluma/processes'); setProcs(r.list || []); if (!r.ok) toast(r.message) } }, '看看有哪些 QQ 进程'),
-            h(Btn, { small: true, onClick: async () => { const r = await get('/onebot/test'); toast(r.message) } }, '测试连接')),
-          sl.lastAttach && sl.lastAttach.at ? h('div', { className: 'ab-small', style: { marginTop: 8, color: sl.lastAttach.ok ? 'var(--ab-ok)' : 'var(--ab-warn)' } }, sl.lastAttach.message) : null,
-          conn && login ? h('div', { className: 'ab-note', style: { marginTop: 10 } }, login.uin === st.config.botQQ ? '✓ 连上了：' + login.nickname + '（' + login.uin + '）' : '⚠ 连上的是 ' + login.uin + '，不是机器人号') : h('div', { className: 'ab-muted ab-small', style: { marginTop: 10 } }, '接入后需要十几秒识别登录状态，稍等一下会自动刷新。'),
-          procs ? h('table', { className: 'ab-table', style: { marginTop: 10 } }, h('tbody', null, procs.map((p) => h('tr', { key: p.pid }, h('td', null, p.pid), h('td', null, p.uin || '识别不出'), h('td', null, p.nickname || ''), h('td', null, p.isBot ? h('span', { className: 'ab-badge' }, '机器人号') : h('span', { className: 'ab-muted ab-small' }, '不会碰')))))) : null),
-        // 4. 完成
-        h('div', null,
-          h('p', { className: 'ab-desc' }, '都准备好了！最后选一下她怎么上线：'),
-          h(Choices, { value: live, onChange: setLive, options: [
-            { value: 'dry', label: '先试运行', desc: '她会照常思考，但只写进日志、不真的发出去。看几条没问题再在右上角关掉试运行' },
-            { value: 'live', label: '直接上线', desc: '马上开始真的回 QQ 消息' },
-          ] }),
-          h('div', { className: 'ab-flex', style: { marginTop: 12 } },
-            h(Btn, { small: true, onClick: async () => { await save({ ...draft, enabled: true, dryRun: false }); const r = await post('/test-send'); toast(r.message); await save({ ...draft, enabled: true, dryRun: live === 'dry' }) } }, '给我发一条自测消息'))),
-      ][step]
-      return h('div', { className: 'ab-card', style: { padding: '20px 22px' } },
-        h('div', { className: 'ab-flex', style: { marginBottom: 6 } }, h('h3', { style: { margin: 0, fontSize: 16 } }, '设置向导'), h('span', { className: 'ab-muted ab-small' }, '第 ' + (step + 1) + ' / ' + WIZ_STEPS.length + ' 步 · ' + WIZ_STEPS[step]), h('div', { className: 'ab-spacer' }),
-          st.config.setupDone && onClose ? h(Btn, { small: true, kind: 'ghost', onClick: onClose }, '关闭向导') : null),
-        h('div', { className: 'ab-wiz-bar' }, WIZ_STEPS.map((s, i) => h('button', { key: s, type: 'button', className: cx('seg', i < step && 'done', i === step && 'on'), onClick: () => i <= step && go(i), title: s }, h('span', null, s)))),
-        verified && !st.config.setupDone ? h('div', { className: 'ab-note', style: { marginTop: 12 } }, '机器人号已经连接并核对通过。', ' ', h(Btn, { small: true, onClick: useExisting }, '使用现有连接，进入面板')) : null,
-        h('div', { style: { minHeight: 220, marginTop: 14 } }, body),
-        h('div', { className: 'ab-flex', style: { marginTop: 16, borderTop: '1px solid var(--ab-line)', paddingTop: 12 } },
-          step > 0 ? h(Btn, { kind: 'ghost', onClick: () => go(step - 1) }, '上一步') : null,
-          h('div', { className: 'ab-spacer' }),
-          step < WIZ_STEPS.length - 1
-            ? h(Btn, { kind: 'primary', disabled: !canNext, onClick: next }, '下一步')
-            : h(Btn, { kind: 'primary', onClick: async () => {
-              if (!(await save({ ...draft, enabled: true, dryRun: live === 'dry' }))) return
-              const r = await post('/setup/done'); toast(r.message, r.ok ? 'ok' : 'err')
-              if (r.ok) { try { localStorage.removeItem('aurabot.wiz') } catch (e) {} reload(); onClose && onClose() }
-            } }, '完成，让大肥鱼上线')))
-    }
-
     // ---------------- 面板主体 ----------------
     function AurabotPage() {
       useStyle()
       const [st, setSt] = useState(null)
       const [err, setErr] = useState('')
       const [draft, setDraft] = useState(null)
-      const [tab, setTab] = useState(() => { try { return localStorage.getItem('aurabot.tab') || 'overview' } catch (e) { return 'overview' } })
+      const [tab, setTab] = useState(() => { try { return localStorage.getItem('aurabot.tab') || 'persona' } catch (e) { return 'persona' } })
       const [toastMsg, setToastMsg] = useState(null)
-      const [wizardOpen, setWizardOpen] = useState(false)
       const toastTimer = useRef(null)
       const dirtyRef = useRef(false)
       const saveRef = useRef(null)
@@ -2330,8 +2285,7 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
       const conn = st.onebot.state === 'connected'
       const status = !cfg.enabled ? { cls: '', text: '休息中（总开关关着）' } : !conn ? { cls: 'err', text: 'QQ 没连上' } : cfg.dryRun ? { cls: 'warn', text: '在线 · 试运行' } : { cls: 'ok', text: '在线' }
       const persona = st.personas.find((p) => p.id === cfg.persona.current)
-      const props = { st, draft, setDraft: setD, toast, reload, go, openWizard: () => setWizardOpen(true) }
-      const showWizard = !cfg.setupDone || wizardOpen
+      const props = { st, draft, setDraft: setD, toast, reload, go }
       // 标签页：内置的按模块在不在跑决定显示；自己写的模块有设置或面板的各占一页
       const mods = st.modules || []
       const running = (id) => { const m = mods.find((x) => x.id === id); return Boolean(m && m.running) }
@@ -2367,16 +2321,15 @@ h(Card, { title: '群里什么时候必回', desc: '被 @、有人引用回复�
             h('div', { className: 'ab-hero-side' },
               h('div', { className: 'ab-switch-row' }, h('span', null, '总开关'), h(Switch, { on: cfg.enabled, onChange: (v) => quickToggle('enabled', v) })),
               h('div', { className: 'ab-switch-row' }, h('span', { className: 'ab-muted' }, '试运行'), h(Switch, { on: cfg.dryRun, onChange: (v) => quickToggle('dryRun', v), title: '开着时只写日志，不真的发到 QQ' })))),
-          showWizard ? h(Wizard, { st, draft, setDraft: setD, save, toast, reload, onClose: () => setWizardOpen(false) }) : null,
-          showWizard ? null : h('div', { className: 'ab-tabs', role: 'tablist', ref: tabsRef }, tabs.map((t) => {
+          h('div', { className: 'ab-tabs', role: 'tablist', ref: tabsRef }, tabs.map((t) => {
             const flag = t.flag === 'group' ? cfg.allow.groups.length > 0 : t.flag ? getPath(cfg, t.flag) : null
             return h('button', { key: t.id, type: 'button', role: 'tab', 'aria-selected': curTab.id === t.id, className: cx('ab-tab', curTab.id === t.id && 'on'), onClick: () => go(t.id) },
               t.label,
               tabDirty(t.id) ? h('i', { className: 'dirty', title: '有没保存的改动' }) : t.flag ? h('i', { className: cx('ab-dot', flag && 'ok'), title: flag ? '开着' : '关着' }) : null)
           })),
-          showWizard ? null : h(TabBoundary, { key: curTab.id, onHome: () => go('overview') }, h(body, { ...props, mod: curTab.ext })),
-          showWizard || curTab.ext ? null : mods.filter((m) => hasUi(m) && m.tab === curTab.id).map((m) => h('div', { key: 'embed-' + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
-          dirty && !showWizard ? h('div', { className: 'ab-savebar' }, h('span', { className: 'msg' }, '有改动还没保存'),
+          h(TabBoundary, { key: curTab.id, onHome: () => go('overview') }, h(body, { ...props, mod: curTab.ext })),
+          curTab.ext ? null : mods.filter((m) => hasUi(m) && m.tab === curTab.id).map((m) => h('div', { key: 'embed-' + m.id, style: { marginTop: 14 } }, h(ExtPage, { ...props, mod: m.id, embedded: true }))),
+          dirty ? h('div', { className: 'ab-savebar' }, h('span', { className: 'msg' }, '有改动还没保存'),
             h('span', { className: 'ab-muted ab-small' }, h('span', { className: 'ab-kbd' }, 'Ctrl'), ' + ', h('span', { className: 'ab-kbd' }, 'S')),
             h(Btn, { kind: 'ghost', onClick: () => setDraft(clone(st.config)) }, '撤销'),
             h(Btn, { kind: 'primary', onClick: () => save() }, '保存设置')) : null,

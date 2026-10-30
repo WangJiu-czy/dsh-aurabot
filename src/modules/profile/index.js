@@ -5,7 +5,7 @@
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { defineTool, str } from '../../tools/tools.js'
-import { isOwner, profileToolVisible, profilePermits } from '../../chat/access.js'
+import { actorIsOwner, profileToolVisible, profilePermits } from '../../chat/access.js'
 import { createQqProfile } from '../../features/qq-profile.js'
 import { resolvePainting } from '../../features/paintings.js'
 import { findFfmpeg, findSharp, shrinkImage, shrinkWithSharp } from '../../core/img.js'
@@ -87,12 +87,13 @@ export default {
     }
 
     api.tool(({ chat, sessionId }) => {
+      if (chat.platform) return [] // Current-profile operations belong to the legacy OneBot account only.
       if (chat.kind !== 'private' && chat.kind !== 'group') return []
       const cfg = api.config()
       const tools = []
-      const allowed = () => chat.kind === 'private' && isOwner(api.config(), chat.userId) && hub.turnSendersAllOwner(sessionId)
+      const allowed = () => chat.kind === 'private' && actorIsOwner(api.config(), chat) && hub.turnSendersAllOwner(sessionId)
       // 查询权限独立于修改权限，始终只给主人私聊，读取对象固定为机器人自己。
-      if (chat.kind === 'private' && isOwner(cfg, chat.userId)) tools.push(defineTool({
+      if (chat.kind === 'private' && actorIsOwner(cfg, chat)) tools.push(defineTool({
         name: 'qq_get_profile',
         description: '查看你自己的当前 QQ 昵称、个性签名和头像地址。主人私聊谈到资料时可主动查询；需要看头像长什么样、评价头像时传 view_avatar=true，返回实际头像图片附件及辅助描述。只读，不发送图片或修改资料；主人要你发头像时用 qq_send_avatar。',
         properties: { view_avatar: { type: 'boolean', description: '是否实际查看头像画面；讨论头像外观时填 true，默认 false' } },
@@ -104,7 +105,7 @@ export default {
           return result
         },
       }))
-      if (chat.kind === 'private' && isOwner(cfg, chat.userId)) tools.push(defineTool({
+      if (chat.kind === 'private' && actorIsOwner(cfg, chat)) tools.push(defineTool({
         name: 'qq_send_avatar',
         description: '主人明确要求“把现在头像发出来”“发你的头像给我”时，发送你自己的当前 QQ 头像图片到本次主人私聊。无需先识图，不接受地址、QQ 号或发送目标。发送成功后不要再重复发图。',
         execute: async () => {

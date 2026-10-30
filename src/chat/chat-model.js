@@ -1,3 +1,5 @@
+import { conversationKey } from './im-context.js'
+
 // 按聊天选模型：主人在面板 / 配置里指定「哪个私聊、哪个群、所有私聊、所有群」各用哪个模型。纯函数。
 //
 // 配置 cfg.chatModels：
@@ -43,6 +45,12 @@ export function normalizeChatModels(raw) {
     groupDefault: normalizeSelection(r.groupDefault) || EMPTY(),
     privates: normalizeMap(r.privates),
     groups: normalizeMap(r.groups),
+    ...(isObj(r.conversations) ? { conversations: Object.fromEntries(Object.entries(r.conversations).filter(([key, value]) => {
+      try {
+        const [platform, accountId, kind, id] = JSON.parse(key)
+        return conversationKey({ platform, accountId, conversation: { kind, id } }) === key && normalizeSelection(value)
+      } catch { return false }
+    }).map(([key, value]) => [key, normalizeSelection(value)])) } : {}),
   }
 }
 
@@ -56,6 +64,10 @@ export function normalizeChatModels(raw) {
 export function resolveChatModel(cfg, chat, available = null) {
   if (!chat) return null
   const c = normalizeChatModels(cfg?.chatModels)
+  if (chat.platform) {
+    const sel = c.conversations?.[conversationKey(chat)]
+    return sel && (!available?.length || available.some(m => m.provider === sel.provider && m.model === sel.model)) ? { ...sel, source: 'conversation' } : null
+  }
   const ok = (s) => Boolean(s) && (!Array.isArray(available) || available.length === 0 || available.some((m) => m.provider === s.provider && m.model === s.model))
   let order = []
   if (chat.kind === 'private') order = [['private', c.privates[String(chat.userId ?? '')]], ['privateDefault', normalizeSelection(c.privateDefault)]]
